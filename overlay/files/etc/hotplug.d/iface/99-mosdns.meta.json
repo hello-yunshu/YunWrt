@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/hotplug.d/iface/99-mosdns",
+  "asserts": [],
+  "reason": "WAN ifup 时合并触发 mosdns 重启",
+  "owner": "yunwrt"
+}

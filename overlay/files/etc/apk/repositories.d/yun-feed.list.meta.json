@@ -1,0 +1,9 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/apk/repositories.d/yun-feed.list",
+  "asserts": [
+    "attach yun-openwrt-packages feed"
+  ],
+  "reason": "接入自有 feed（upnp-nat-relay / nginx-manager / cloudflare-ip，后续含 OpenClash）",
+  "owner": "yunwrt"
+}

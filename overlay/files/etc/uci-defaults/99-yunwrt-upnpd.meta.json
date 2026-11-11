@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/uci-defaults/99-yunwrt-upnpd",
+  "asserts": [],
+  "reason": "启用 UPnP 与 NAT 中继，ext_allow_private_ipv4=1",
+  "owner": "yunwrt"
+}

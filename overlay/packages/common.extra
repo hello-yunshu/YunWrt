@@ -1,0 +1,101 @@
+# 首版追加包清单（公共部分）
+# 依据：保全审计 §10.3 的 114 个保留包 + 3 个替换物；已与上游 profiles 去重。
+# 冻结线见 §10.4：这里只放已在清单内的包，新增包必须走 issue → 能力清单 → 评审。
+
+# --- Web 管理栈（D5：nginx + uwsgi，不用 uhttpd）---
+luci-nginx
+luci-compat
+luci-app-nginx-manager
+luci-app-cloudflare-ip
+luci-app-upnp-nat-relay
+luci-theme-aurora
+luci-app-aurora-config
+luci-theme-bootstrap
+luci-app-ramfree
+luci-app-samba4
+
+# --- 透明代理（D6：自有 feed 编译，P3b）---
+luci-app-openclash
+
+# --- 分流 DNS（mosdns + flock）---
+luci-app-mosdns
+luci-i18n-mosdns-zh-cn
+v2ray-geoip
+v2ray-geosite
+flock
+bind-host
+drill
+
+# --- 转发与防火墙（FlowCone 定案 + nat6 替换）---
+firewall4
+kmod-nft-offload
+flowcone
+nat6
+arptables-nft
+ebtables-nft
+ip6tables-nft
+xtables-nft
+iptables-nft
+iptables-mod-conntrack-extra
+iptables-mod-iprange
+iptables-mod-nat-extra
+iptables-mod-socket
+iptables-mod-tproxy
+
+# --- VPN ---
+wireguard-tools
+
+# --- DDNS ---
+ddns-scripts
+ddns-scripts-dnspod
+ddns-scripts-services
+ddns-scripts-aliyun
+
+# --- 存储 ---
+block-mount
+fdisk
+gdisk
+fstrim
+resize2fs
+
+# --- 加密库 ---
+libopenssl-conf
+libopenssl-devcrypto
+libopenssl-legacy
+libcurl
+
+# --- 运维工具 ---
+bash
+bc
+coreutils
+coreutils-stat
+coreutils-timeout
+coreutils-nohup
+htop
+jq
+pv
+zstd
+git
+git-http
+gzip
+bzip2
+xz
+xz-utils
+iperf3
+pciutils
+procps-ng
+procps-ng-ps
+procps-ng-top
+procps-ng-pkill
+procps-ng-free
+usbutils
+tcpdump
+ip-full
+nano
+tree
+coremark
+openssh-sftp-client
+openssh-sftp-server
+
+# --- 上游默认带、首版不要（§11 #3：usbmuxd 从未运行）---
+-usbmuxd

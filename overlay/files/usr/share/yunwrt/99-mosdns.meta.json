@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "usr/share/yunwrt/99-mosdns",
+  "asserts": [],
+  "reason": "mosdns hotplug 权威模板，供升级后重装",
+  "owner": "yunwrt"
+}

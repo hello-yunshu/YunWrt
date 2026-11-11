@@ -1,0 +1,102 @@
+#!/bin/sh
+# 首次启动网络初始化：确定 WAN/LAN 对应网卡，并把 LAN 固定到 192.168.2.1/24。
+#
+# 设计：
+#   - uci-defaults 只在首次配置时运行一次，成功后自删除；升级/重启不再改写 network。
+#   - network 里已有 lan/wan 时直接跳过，用户配置优先。
+#   - 可选 /etc/network.env 提供 WAN_MAC / LAN_MAC 做稳定映射（Hyper-V/KVM 网卡顺序不稳）。
+#   - 未提供 MAC 时回退「第一块物理网卡 = WAN，第二块 = LAN」，仅对全新安装生效。
+#   - 显式 MAC 解析失败时 exit 1，保留本脚本等用户修正后重试，绝不静默改用其它口。
+
+[ -f /etc/network.env ] && . /etc/network.env
+
+lan_device="$(uci -q get network.lan.device)"
+wan_device="$(uci -q get network.wan.device)"
+[ -n "$lan_device" ] || [ -n "$wan_device" ] && exit 0
+
+ifaces=""
+for d in /sys/class/net/*; do
+	[ -d "$d" ] || continue
+	name="${d##*/}"
+	case "$name" in
+	lo | br-* | docker0 | veth* | tun* | tap* | vnet* | virbr*) continue ;;
+	esac
+	ifaces="$ifaces $name"
+done
+
+mac_to_iface() {
+	mac="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+	for d in /sys/class/net/*; do
+		[ -f "$d/address" ] || continue
+		addr="$(cat "$d/address" 2>/dev/null | tr 'A-Z' 'a-z')"
+		[ "$addr" = "$mac" ] && {
+			echo "${d##*/}"
+			return 0
+		}
+	done
+	return 1
+}
+
+wan=""
+lan=""
+explicit_error=0
+if [ -n "${WAN_MAC:-}" ]; then
+	wan="$(mac_to_iface "$WAN_MAC")"
+	[ -n "$wan" ] || {
+		echo "ERROR: WAN_MAC '$WAN_MAC' not found; keeping uci-defaults for retry." >&2
+		explicit_error=1
+	}
+fi
+if [ -n "${LAN_MAC:-}" ]; then
+	lan="$(mac_to_iface "$LAN_MAC")"
+	[ -n "$lan" ] || {
+		echo "ERROR: LAN_MAC '$LAN_MAC' not found; keeping uci-defaults for retry." >&2
+		explicit_error=1
+	}
+fi
+
+first=""
+second=""
+for i in $ifaces; do
+	if [ -z "$first" ]; then
+		first="$i"
+	elif [ -z "$second" ]; then
+		second="$i"
+		break
+	fi
+done
+[ -n "${WAN_MAC:-}" ] || wan="${wan:-$first}"
+[ -n "${LAN_MAC:-}" ] || lan="${lan:-$second}"
+
+if [ -n "$wan" ] && [ -n "$lan" ] && [ "$wan" = "$lan" ]; then
+	if [ -n "${WAN_MAC:-}" ] || [ -n "${LAN_MAC:-}" ]; then
+		echo "ERROR: WAN_MAC / LAN_MAC map to the same interface '$wan'." >&2
+		exit 1
+	fi
+	echo "WARNING: only one NIC available; skipping auto-init." >&2
+	exit 0
+fi
+
+[ "$explicit_error" -eq 0 ] || exit 1
+[ -n "$lan" ] || exit 0
+
+uci -q batch <<EOF
+set network.lan.device='$lan'
+set network.lan.ipaddr='192.168.2.1'
+set network.lan.netmask='255.255.255.0'
+EOF
+
+if [ -n "$wan" ]; then
+	if ! uci -q get network.wan >/dev/null 2>&1; then
+		uci -q batch <<EOF
+set network.wan=interface
+set network.wan.proto='dhcp'
+set network.wan.device='$wan'
+EOF
+	else
+		uci -q set network.wan.device="$wan"
+	fi
+fi
+
+uci -q commit network
+exit 0

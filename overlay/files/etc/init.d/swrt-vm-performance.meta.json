@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/init.d/swrt-vm-performance",
+  "asserts": [],
+  "reason": "按 Hyper-V/hv_netvsc 队形决定 Packet Steering",
+  "owner": "yunwrt"
+}

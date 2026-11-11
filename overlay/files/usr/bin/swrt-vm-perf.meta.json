@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "usr/bin/swrt-vm-perf",
+  "asserts": [],
+  "reason": "只读性能诊断工具",
+  "owner": "yunwrt"
+}

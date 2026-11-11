@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/config/swrt-vm-performance",
+  "asserts": [],
+  "reason": "VM 网络性能策略默认 auto",
+  "owner": "yunwrt"
+}

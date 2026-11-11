@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/uci-defaults/99-x86-vm-network",
+  "asserts": [],
+  "reason": "首次启动固定 WAN/LAN 网卡与 LAN 192.168.2.1/24",
+  "owner": "yunwrt"
+}

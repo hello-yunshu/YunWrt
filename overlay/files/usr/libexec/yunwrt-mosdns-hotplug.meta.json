@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "usr/libexec/yunwrt-mosdns-hotplug",
+  "asserts": [],
+  "reason": "mosdns 重启合并器，flock 串行化",
+  "owner": "yunwrt"
+}

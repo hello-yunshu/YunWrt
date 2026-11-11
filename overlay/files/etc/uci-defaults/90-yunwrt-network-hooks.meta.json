@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/uci-defaults/90-yunwrt-network-hooks",
+  "asserts": [],
+  "reason": "清理历史 hook 并以模板重装 mosdns hotplug",
+  "owner": "yunwrt"
+}

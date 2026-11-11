@@ -1,0 +1,37 @@
+# 首版追加包清单（x86_64 架构相关）
+# 内核 kmod 必须与本次 release 内核同源，ImageBuilder 会按 release 自动取。
+
+# --- 加密与 VPN ---
+kmod-wireguard
+kmod-crypto-acompress
+kmod-crypto-aead
+kmod-crypto-authenc
+kmod-crypto-hash
+kmod-crypto-manager
+kmod-crypto-null
+kmod-crypto-seqiv
+kmod-crypto-user
+kmod-crypto-crc32c
+kmod-crypto-chacha20poly1305
+kmod-crypto-ghash
+kmod-crypto-hmac
+kmod-crypto-sha256
+kmod-crypto-sha512
+kmod-crypto-xts
+kmod-crypto-ctr
+kmod-crypto-gcm
+kmod-crypto-cbc
+kmod-crypto-md5
+kmod-crypto-sha1
+kmod-crypto-sha3
+kmod-crypto-rng
+
+# --- 转发与拥塞控制 ---
+kmod-nft-socket
+kmod-tcp-bbr
+
+# --- 压缩与内存 ---
+kmod-zram
+kmod-lib-lz4
+kmod-lib-zstd
+kmod-ikconfig

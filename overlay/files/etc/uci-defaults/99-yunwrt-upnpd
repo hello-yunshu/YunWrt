@@ -1,0 +1,23 @@
+#!/bin/sh
+# 首次启动把 UPnP 与 NAT 中继修到"可判定可用"的状态。
+# 设备历史问题是：upnp_nat_relay 处于 enabled 但未运行，miniupnpd 根本没装。
+# 这里只做启用与启动，不改具体转发规则；规则由 patch 层与自研包负责。
+
+[ -f /etc/config/upnpd ] || exit 0
+
+uci -q batch <<EOF
+set upnpd.@upnpd[0].enabled='1'
+set upnpd.@upnpd[0].ext_allow_private_ipv4='1'
+EOF
+uci -q commit upnpd
+
+[ -x /etc/init.d/miniupnpd ] && {
+	/etc/init.d/miniupnpd enable
+	/etc/init.d/miniupnpd restart
+}
+[ -x /etc/init.d/upnp_nat_relay ] && {
+	/etc/init.d/upnp_nat_relay enable
+	/etc/init.d/upnp_nat_relay restart
+}
+
+exit 0

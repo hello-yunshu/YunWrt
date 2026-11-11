@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/sysctl.d/90-yunwrt-x86-network.conf",
+  "asserts": [],
+  "reason": "扩大本机 ephemeral port range 到 10240-65535",
+  "owner": "yunwrt"
+}
