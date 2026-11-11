@@ -98,9 +98,14 @@ MANIFEST="$(find "${ROOT_DIR}/build" -path '*/bin/targets/x86/64/*.manifest' -ty
 KERNEL="$(sed -n 's/^kernel - \([^ ]*\).*/\1/p' "${MANIFEST}" | head -1)"
 [ -n "${KERNEL}" ] || KERNEL="unknown"
 
-echo "==> 5b 清单核对（请求的包必须在 manifest 里）"
-EXPECTED="$(cat "${ROOT_DIR}/build/profiles/packages.common" "${ROOT_DIR}/build/profiles/packages.x86_64" |
-	sed 's/[[:space:]]*#.*//' | tr -d '\r' | awk 'NF' | grep -v '^-' | sort -u)"
+echo "==> 5b 清单核对（请求的包必须在 manifest 里，显式移除的除外）"
+ALL="$(cat "${ROOT_DIR}/build/profiles/packages.common" "${ROOT_DIR}/build/profiles/packages.x86_64" |
+	sed 's/[[:space:]]*#.*//' | tr -d '\r' | awk 'NF' | sort -u)"
+REMOVED="$(printf '%s\n' "${ALL}" | sed -n 's/^-//p' | sort -u)"
+EXPECTED="$(printf '%s\n' "${ALL}" | grep -v '^-')"
+if [ -n "${REMOVED}" ]; then
+	EXPECTED="$(printf '%s\n' "${EXPECTED}" | grep -vxF -f <(printf '%s\n' "${REMOVED}") || true)"
+fi
 missing=""
 for p in ${EXPECTED}; do
 	case "${p}" in
