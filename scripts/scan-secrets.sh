@@ -7,10 +7,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="tree"
 case "${1:-}" in
 	--history) MODE="history" ;;
+	--objects) MODE="objects" ;;
 	--self-test) MODE="self-test" ;;
 	"") ;;
 	*)
-		echo "用法: $0 [--history|--self-test]" >&2
+		echo "用法: $0 [--history|--objects|--self-test]" >&2
 		exit 2
 		;;
 esac
@@ -47,10 +48,10 @@ judge_file() {
 			while IFS= read -r l; do hit "${name}" "${l}"; done
 	done
 
-	# 公网 IPv4：八位组必须 ≤255（排除 6.12.94.2023 这类版本号），且非私有/保留段
+	# 公网 IPv4：八位组必须 ≤255（排除 6.12.94.2023 这类版本号），且非私有/保留/文档段
 	awk '
 	function is_priv(ip) {
-		return ip ~ /^(0\.0\.0\.0|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|255\.255\.|22[4-9]\.|2[3-5][0-9]\.)/
+		return ip ~ /^(0\.0\.0\.0|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|255\.255\.|22[4-9]\.|2[3-5][0-9]\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/
 	}
 	function octets_ok(ip,   a, i) {
 		split(ip, a, ".")
@@ -69,13 +70,14 @@ judge_file() {
 		while IFS= read -r l; do hit '公网 IPv4' "${l}"; done
 
 	# 公网 IPv6：只看 2000::/3（当前全球单播分配段），天然排除时间戳、fe80::、fc00::、ff02::
+	# 2001:db8::/32 是文档段，不算真实地址
 	awk '
 	{
 		t = $0; sub(/^[^\t]*\t/, "", t)
 		bad = 0; s = t
-		while (match(s, /([0-9a-fA-F]{1,4}:){1,}[0-9a-fA-F]{0,4}/)) {
+		while (match(s, /([0-9a-fA-F]{1,4}:){2,}[0-9a-fA-F]{0,4}/)) {
 			ip = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
-			if (ip ~ /^[23][0-9a-fA-F]{3}:/) { bad = 1 }
+			if (ip ~ /^[23][0-9a-fA-F]{3}:/ && ip !~ /^2001:db8:/) { bad = 1 }
 		}
 		if (bad) print
 	}' "${lines}" | grep -vE -- "${ALLOW_RE}" |
@@ -112,7 +114,12 @@ self_test() {
 	local tmp
 	tmp="$(mktemp -d)"
 
-	printf 'leak.txt:1\tcfg = { api_key = "CHANGEME" }\n' >"${tmp}/lines"
+	# 样本在运行时拼出来，避免扫描器源码自身成为命中
+	local gh_sample ip4 v6
+	gh_sample="$(printf '%s%s' 'ghp_' '0123456789abcdefghij0123456789abcd')"
+	ip4="8.$(printf '%s' '8.8.8')"
+	v6="2408:$(printf '%s' '8207:1234::1')"
+	printf 'leak.txt:1\tcfg = { api_key = "%s" }\n' "${gh_sample}" >"${tmp}/lines"
 	: >"${HITS}"
 	judge_file "${tmp}/lines"
 	if [ ! -s "${HITS}" ]; then
@@ -134,10 +141,10 @@ self_test() {
 	echo "ok  self-test: 干净内容放行"
 
 	# 3) IP 判定：公网要红，版本号/时间戳/内网要绿
-	printf 'a:1\tupstream 203.0.113.9\nb:1\tversion 6.12.94.2023.05.17\nc:1\ttime 13:28:21\nd:1\tv6 2001:db8::1\ne:1\tv6 fe80::1\nf:1\tns 192.168.2.1\n' >"${tmp}/lines"
+	printf 'a:1\tupstream %s\nb:1\tversion 6.12.94.2023.05.17\nc:1\ttime 13:28:21\nd:1\tv6 %s\ne:1\tv6 fe80::1\nf:1\tns 192.168.2.1\n' "${ip4}" "${v6}" >"${tmp}/lines"
 	: >"${HITS}"
 	judge_file "${tmp}/lines"
-	if ! grep -q '8\.8\.8\.8' "${HITS}" || ! grep -q '2408:' "${HITS}"; then
+	if ! grep -qF "${ip4}" "${HITS}" || ! grep -qF '2408:' "${HITS}"; then
 		echo "FAIL self-test: 公网 IP 未被检出" >&2
 		cat "${HITS}" >&2
 		rm -rf "${tmp}"
@@ -160,6 +167,16 @@ case "${MODE}" in
 self-test)
 	self_test
 	exit $?
+	;;
+objects)
+	echo "==> 全量对象扫描（含不可达 blob，不只可达提交）"
+	while IFS= read -r oid; do
+		git -C "${ROOT_DIR}" cat-file blob "${oid}" 2>/dev/null |
+			grep -nE '' | sed -E "s|^([0-9]+):|obj:${oid}:\1\t|"
+	done < <(git -C "${ROOT_DIR}" cat-file --batch-all-objects --batch-check='%(objecttype) %(objectname)' |
+		awk '$1 == "blob" { print $2 }') >"${LINES}"
+	echo "    待扫行数：$(wc -l <"${LINES}" | tr -d ' ')"
+	judge_file "${LINES}"
 	;;
 tree)
 	echo "==> 工作树扫描（tracked 文件）"
