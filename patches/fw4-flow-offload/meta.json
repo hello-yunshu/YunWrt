@@ -1,0 +1,15 @@
+{
+  "kind": "override",
+  "upstream_path": "usr/share/ucode/fw4.uc",
+  "base_sha256": "148ded17db6a8984e97875c8e60ed7e4ab4c475fbd84a31bba6b543190b4e524",
+  "base_source": "firewall4@b6e5157527d361f99ad52eaa6da273cb0f2dfd59 (openwrt v25.12.6)",
+  "source_repo": "https://github.com/openwrt/firewall4",
+  "source_path": "root/usr/share/ucode/fw4.uc",
+  "asserts": [
+    "function resolve_offload_devices",
+    "net.physdev || net.device"
+  ],
+  "reason": "软件/hardware flow offload 只收集 net.physdev；虚拟网卡（Hyper-V/KVM virtio）没有 physdev，offload 设备集为空。回退到 net.device 后 eth0/eth1 能进入 flowtable。",
+  "owner": "yunwrt",
+  "makefile_path": "package/network/config/firewall4/Makefile"
+}

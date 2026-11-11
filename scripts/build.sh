@@ -34,10 +34,13 @@ echo "==> 4b 缺包检查（上游默认 WARNING 跳过，这里升级为硬失�
 skipped="$(sed -n 's/.*skipping: //p' "${IB_LOG}" | tr '\n' ' ' | sed 's/  */ /g')"
 [ -z "${skipped}" ] || die "以下包在 feed 中不可用，镜像不完整：${skipped}"
 
-echo "==> 6/6 产物整理"
 VERSION="$(sed -n 's/.*Using OpenWrt release: //p' "${IB_LOG}" | head -1)"
 [ -n "${VERSION}" ] || die "无法从构建日志解析 OpenWrt 版本"
 
+echo "==> 5b patch 基线（按实际解析出的 release）"
+bash "${ROOT_DIR}/scripts/check-patch-bases.sh" "${VERSION}"
+
+echo "==> 6/6 产物整理"
 MANIFEST="$(find "${ROOT_DIR}/build" -path '*/bin/targets/x86/64/*.manifest' -type f | head -1)"
 [ -n "${MANIFEST}" ] || die "找不到 manifest，构建产物不完整"
 
