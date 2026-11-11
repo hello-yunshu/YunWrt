@@ -153,7 +153,8 @@ if [ -z "${OVMF_CODE}" ]; then
 	for pair in \
 		"/usr/share/OVMF/OVMF_CODE_4M.fd:/usr/share/OVMF/OVMF_VARS_4M.fd" \
 		"/usr/share/OVMF/OVMF_CODE.fd:/usr/share/OVMF/OVMF_VARS.fd" \
-		"/usr/share/edk2/ovmf/OVMF_CODE.fd:/usr/share/edk2/ovmf/OVMF_VARS.fd"; do
+		"/usr/share/edk2/ovmf/OVMF_CODE.fd:/usr/share/edk2/ovmf/OVMF_VARS.fd" \
+		"/opt/homebrew/share/qemu/edk2-x86_64-code.fd:/opt/homebrew/share/qemu/edk2-i386-vars.fd"; do
 		IFS=: read -r code vars <<<"${pair}"
 		if [ -r "${code}" ] && [ -r "${vars}" ]; then
 			OVMF_CODE="${code}"
