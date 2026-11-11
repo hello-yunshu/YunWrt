@@ -191,9 +191,19 @@ trap 'exit 143' TERM
 
 cp "${OVMF_VARS}" "${VARS}"
 case "${IMG}" in
-*.gz) zcat "${IMG}" >"${RUN}" ;;
+*.gz)
+	# 不用 zcat：BSD/macOS 的 zcat 会给 .gz 再补一个 .Z 后缀，解出 0 字节
+	gzip -dc "${IMG}" >"${RUN}" || {
+		echo "ERROR: 解压失败: ${IMG}" >&2
+		exit 1
+	}
+	;;
 *) cp "${IMG}" >"${RUN}" ;;
 esac
+[ -s "${RUN}" ] || {
+	echo "ERROR: 镜像解压后为空: ${IMG}" >&2
+	exit 1
+}
 
 mkfifo "${WORK}/console.in"
 "${QEMU_BIN}" \
@@ -207,9 +217,13 @@ mkfifo "${WORK}/console.in"
 	-nographic -no-reboot \
 	<"${WORK}/console.in" >"${LOG}" 2>&1 &
 QEMU_PID=$!
-exec {CONSOLE_FD}>"${WORK}/console.in"
+# 用固定 fd 3 而不是 {VAR}>，后者要 bash 4.3，macOS 自带 bash 3.2
+exec 3>"${WORK}/console.in" || {
+	echo "ERROR: 打不开控制台 fifo" >&2
+	exit 1
+}
 
-send() { printf '%s\n' "$1" >&"${CONSOLE_FD}"; }
+send() { printf '%s\n' "$1" >&3; }
 
 wait_for() { # $1=固定串 $2=超时秒
 	local deadline=$((SECONDS + $2))
@@ -275,7 +289,8 @@ fi
 
 printf '%s\n' "${SNIPPET}" | while IFS= read -r line; do
 	send "${line}"
-	sleep 0.05
+	# 串口是模拟的，发太快会丢字符（表现为命令被截断、$() 不展开）
+	sleep 0.25
 done
 
 if ! wait_for 'CAP_END' "${CAP_TIMEOUT}"; then
@@ -286,8 +301,9 @@ fi
 sleep 1
 
 : >"${RESULTS}"
-sed -n '/CAP_BEGIN/,/CAP_END/p' "${LOG}" |
-	sed -n 's/.*R:\([a-z0-9_]*\):\(.*\)$/\1	\2/p' >"${RESULTS}"
+# 只认「行首就是 R:」的输出行；回显出来的命令行（echo "R:...$(...)"）不算证据
+sed -n '/CAP_BEGIN/,/CAP_END/p' "${LOG}" | tr -d '\r' |
+	sed -n 's/^R:\([a-z0-9_]*\):\(.*\)$/\1	\2/p' >"${RESULTS}"
 
 echo "[cap] 证据："
 sed 's/^/    /' "${RESULTS}"
