@@ -1,0 +1,9 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/apk/keys/yun-feed.rsa.pub",
+  "asserts": [
+    "image trusts yun-openwrt-packages feed signature"
+  ],
+  "reason": "镜像内 apk 需要该公钥校验自有 feed（yun-openwrt-packages）的包签名",
+  "owner": "yunwrt"
+}
