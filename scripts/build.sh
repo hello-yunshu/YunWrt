@@ -83,6 +83,9 @@ echo "==> 6/7 缺包检查（上游默认 WARNING 跳过，这里升级为硬失
 skipped="$(sed -n 's/.*skipping: //p' "${IB_LOG}" | tr '\n' ' ' | sed 's/  */ /g')"
 [ -z "${skipped}" ] || die "以下包在 feed 中不可用，镜像不完整：${skipped}"
 
+echo "==> 6/7 OpenClash 看门狗门禁（防 feed 回退到坏版本）"
+bash "${ROOT_DIR}/scripts/check-openclash-watchdog.sh"
+
 VERSION="$(sed -n 's/.*Using OpenWrt release: //p' "${IB_LOG}" | head -1)"
 [ -n "${VERSION}" ] || die "无法从构建日志解析 OpenWrt 版本"
 [ "${VERSION}" = "${VERSION_UP}" ] ||
