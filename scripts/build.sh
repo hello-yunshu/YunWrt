@@ -52,6 +52,23 @@ prepare_imagebuilder() {
 	fi
 	[ -f "${ib_dir}/repositories" ] || die "预置失败：${ib_dir}/repositories 不存在"
 
+	# 分区几何必须与设备逐项一致（D11）：IB 默认 p1=16 MiB / p2=104 MiB，
+	# 布局不同会让 platform_check_image 判定「layout changed」→ get_image_dd 整盘写，
+	# 而新镜像 p1 只剩 16 MiB，platform_copy_config 写不进配置包且 do_stage2 不查返回值。
+	# ImageBuilder 没有 KERNEL_PARTSIZE 的 make 变量映射，只能写进解包后的 .config。
+	[ -f "${ib_dir}/.config" ] || die "预置失败：${ib_dir}/.config 不存在"
+	set_ib_config() {
+		local key="$1" val="$2" file="${ib_dir}/.config"
+		if grep -q "^${key}=" "$file"; then
+			sed -i.bak "s|^${key}=.*|${key}=${val}|" "$file" && rm -f "${file}.bak"
+		else
+			printf '%s=%s\n' "$key" "$val" >> "$file"
+		fi
+		grep -qx "${key}=${val}" "$file" || die "写入 ${key}=${val} 失败"
+	}
+	set_ib_config CONFIG_TARGET_KERNEL_PARTSIZE 64
+	set_ib_config CONFIG_TARGET_ROOTFS_PARTSIZE 1024
+
 	feed="$(grep -v '^[[:space:]]*#' "${ROOT_DIR}/overlay/files/etc/apk/repositories.d/yun-feed.list" |
 		awk 'NF' | head -1)"
 	[ -n "${feed}" ] || die "yun-feed.list 里没有 feed 地址"
