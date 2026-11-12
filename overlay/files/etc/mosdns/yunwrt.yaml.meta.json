@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/mosdns/yunwrt.yaml",
+  "asserts": [],
+  "reason": "mosdns 5.3.4 自带配置：127.0.0.1:953 的 UDP/TCP 入口，转发 DoT 上游",
+  "owner": "yunwrt"
+}

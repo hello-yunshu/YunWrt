@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/uci-defaults/97-yunwrt-mosdns",
+  "asserts": [],
+  "reason": "启用 mosdns 并改用自带配置，监听 127.0.0.1:953（绕开 5.3.4 的 log.size 生成器 bug）",
+  "owner": "yunwrt"
+}

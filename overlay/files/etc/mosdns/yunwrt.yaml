@@ -1,0 +1,33 @@
+# YunWrt 自带的 mosdns 配置（v5 语法）。
+#
+# 为什么不用 luci-app-mosdns 生成 /var/etc/mosdns.json：
+# 该版本（mosdns 5.3.4-r15）的 init 脚本仍会写出 "log": {"size": ...}，
+# 而 5.3.4 的配置 schema 已经不认 size，直接 FATAL: 'log' has invalid keys: size。
+# 所以这里把 uci 的 configfile 指到本文件，绕开生成器（init 脚本对非默认路径不做生成）。
+#
+# 只做一件事：在 127.0.0.1:953 提供 DNS 入口，转发到公共 DoT 上游。
+# 分流/去重策略需要时再往 plugins 里加 sequence，不影响监听这件事。
+
+log:
+  level: error
+
+plugins:
+  - tag: forward_dot
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "tls://1.1.1.1"
+        - addr: "tls://8.8.8.8"
+
+  - tag: local_udp
+    type: udp_server
+    args:
+      entry: forward_dot
+      listen: "127.0.0.1:953"
+
+  - tag: local_tcp
+    type: tcp_server
+    args:
+      entry: forward_dot
+      listen: "127.0.0.1:953"

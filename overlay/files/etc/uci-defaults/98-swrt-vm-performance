@@ -9,9 +9,20 @@
 #   - start  让第一次启动本轮也立即应用 auto 决策
 # 执行成功后 uci-defaults 会自动移除本脚本，不影响后续升级与用户已有配置。
 
-if [ -x /etc/init.d/swrt-vm-performance ]; then
-    /etc/init.d/swrt-vm-performance enable
-    /etc/init.d/swrt-vm-performance start
-fi
+die() {
+	echo "ERROR: $*" >&2
+	exit 1
+}
+
+# 缺失就 exit 1 保留脚本重试：静默 exit 0 会让"overlay 没进镜像"看起来像成功。
+[ -x /etc/init.d/swrt-vm-performance ] || die "/etc/init.d/swrt-vm-performance 缺失，overlay 未进镜像"
+
+/etc/init.d/swrt-vm-performance enable || die "enable 失败"
+# enable 的产物是 rc.d 链接，必须回读；否则服务重启后不会再跑
+[ -e /etc/rc.d/S99swrt-vm-performance ] || die "enable 后 /etc/rc.d/S99swrt-vm-performance 不存在"
+
+# start 失败不算致命：同一次启动里 S99 还会再跑一次，由那时兜底
+/etc/init.d/swrt-vm-performance start ||
+	echo "WARNING: 首次 start 返回非 0，已由 /etc/rc.d/S99swrt-vm-performance 在本次启动稍后重试" >&2
 
 exit 0

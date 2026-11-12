@@ -22,6 +22,21 @@ if has_files "${ROOT_DIR}/overlay/files"; then
 		"${ROOT_DIR}/overlay/files/" "${BUILD}/files/"
 fi
 
+echo "==> 断言：overlay 提供的 init / uci-defaults / hotplug 脚本必须可执行"
+# 只校验 overlay/files 里的文件：init.d 由 procd 直接 exec、uci-defaults 由 /etc/init.d/boot
+# 逐个 source，hotplug.d 由 hotplug-call source，后两者虽不强制 +x，但我们自己的脚本一律 755，
+# 一旦丢失就是打包失误。上游自带的（如 hotplug.d/net/01-maximize_nic_rx_tx_buffers）是 644，
+# 不属于我们的责任范围，扫全树会误伤并让构建中断。
+bad=""
+if [ -d "${ROOT_DIR}/overlay/files" ]; then
+	while IFS= read -r f; do
+		rel="${f#"${ROOT_DIR}/overlay/files/"}"
+		[ -x "${BUILD}/files/${rel}" ] || bad="${bad} ${rel}"
+	done < <(find "${ROOT_DIR}/overlay/files" -type f ! -name '*.meta.json' ! -name '.gitkeep' \
+		\( -path '*/etc/uci-defaults/*' -o -path '*/etc/init.d/*' -o -path '*/etc/hotplug.d/*' \) 2>/dev/null)
+fi
+[ -z "${bad}" ] || die "以下脚本缺少可执行位：${bad}"
+
 echo "==> 叠加 apk 公钥"
 mkdir -p "${BUILD}/keys"
 if has_files "${ROOT_DIR}/overlay/keys"; then

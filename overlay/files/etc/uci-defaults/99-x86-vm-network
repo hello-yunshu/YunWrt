@@ -8,10 +8,38 @@
 #   - 未提供 MAC 时回退「第一块物理网卡 = WAN，第二块 = LAN」，仅对全新安装生效。
 #   - 显式 MAC 解析失败时 exit 1，保留本脚本等用户修正后重试，绝不静默改用其它口。
 
+die() {
+	echo "ERROR: $*" >&2
+	exit 1
+}
+
+# 写完必须回读确认：uci commit 失败或写到了别的 section 时，首启脚本会被删除且无人察觉，
+# 症状就是「脚本执行了但运行态没变」。回读不符则 exit 1，脚本保留，下次启动重试。
+verify_lan_ip() {
+	local got
+	got="$(uci -q get network.lan.ipaddr)"
+	[ "${got}" = "192.168.2.1" ] || die "network.lan.ipaddr 回读为 '${got}'，期望 192.168.2.1"
+}
+
 [ -f /etc/network.env ] && . /etc/network.env
 
 lan_device="$(uci -q get network.lan.device)"
 wan_device="$(uci -q get network.wan.device)"
+
+# x86 的 board.d/02_network + config_generate 在首启时（S10boot 内、本脚本之前）就已经
+# 建好 lan=br-lan、wan=eth1。此时设备映射是平台探测出来的正确值，不能覆盖；
+# 但 LAN 地址段仍要统一成 192.168.2.0/24（避开上游默认的 192.168.1.1）。
+# 注意 config_generate 写的是 list ipaddr，必须先 delete 再写 option，否则两者并存。
+if [ -n "$lan_device" ] && [ -n "$wan_device" ]; then
+	uci -q batch <<-EOF
+		delete network.lan.ipaddr
+		set network.lan.ipaddr='192.168.2.1'
+		set network.lan.netmask='255.255.255.0'
+	EOF
+	uci -q commit network
+	verify_lan_ip
+	exit 0
+fi
 [ -n "$lan_device" ] || [ -n "$wan_device" ] && exit 0
 
 ifaces=""
@@ -81,6 +109,7 @@ fi
 [ -n "$lan" ] || exit 0
 
 uci -q batch <<EOF
+delete network.lan.ipaddr
 set network.lan.device='$lan'
 set network.lan.ipaddr='192.168.2.1'
 set network.lan.netmask='255.255.255.0'
@@ -99,4 +128,5 @@ EOF
 fi
 
 uci -q commit network
+verify_lan_ip
 exit 0

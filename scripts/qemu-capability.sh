@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P4 阻塞验收：QEMU 启动镜像，进 guest 取证据，逐项判定 8 项发布门槛。
+# P4 阻塞验收：QEMU 启动镜像，进 guest 取证据，逐项判定 18 项发布门槛。
 # 任一项不满足即非 0 退出。--self-test 用合成证据证明判定确实会红（无需 QEMU）。
 #   bash scripts/qemu-capability.sh [<image>] [--inject <key>] [--self-test]
 set -uo pipefail
@@ -35,7 +35,7 @@ EXPECTED='
 ①|lan_ip|eq|192.168.2.1
 ①|lan_addr|eq|192.168.2.1/24
 ①|wan_addr|re|^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/
-②|luci_code|eq|200
+②|luci_ui|eq|ok
 ③|port_range|eq|10240 65535
 ④|mosdns953|re|^[1-9][0-9]*$
 ⑤|uci_defaults_left|eq|0
@@ -45,7 +45,7 @@ EXPECTED='
 ⑦|upnpd_ext_private|eq|1
 ⑦|upnp_relay|eq|present
 ⑧|flowcone_pkg|re|^[1-9][0-9]*$
-⑧|btf|eq|yes
+⑧|btf|re|^(yes|detached)$
 ⑧|flowcone_proc|eq|yes
 ⑧|offload_rule|re|^[1-9][0-9]*$
 ⑧|dmesg_bad|eq|0
@@ -97,10 +97,10 @@ self_test() {
 
 	printf '%s\n' \
 		$'lan_ip\t192.168.2.1' $'lan_addr\t192.168.2.1/24' $'wan_addr\t10.0.2.15/24' \
-		$'luci_code\t200' $'port_range\t10240 65535' $'mosdns953\t1' \
+		$'luci_ui\tok' $'port_range\t10240 65535' $'mosdns953\t1' \
 		$'uci_defaults_left\t0' $'fw4_check\tOK' $'fw4_net_device\t1' \
 		$'upnpd_enabled\t1' $'upnpd_ext_private\t1' $'upnp_relay\tpresent' \
-		$'flowcone_pkg\t1' $'btf\tyes' $'flowcone_proc\tyes' $'offload_rule\t2' \
+		$'flowcone_pkg\t1' $'btf\tdetached' $'flowcone_proc\tyes' $'offload_rule\t2' \
 		$'dmesg_bad\t0' $'sfe_opt\tgone' >"${tmp}/good"
 
 	if ! evaluate "${tmp}/good" >/dev/null; then
@@ -108,25 +108,33 @@ self_test() {
 		bad=1
 	fi
 
-	for key in lan_ip lan_addr luci_code port_range mosdns953 uci_defaults_left \
-		fw4_check fw4_net_device upnpd_enabled upnp_relay flowcone_pkg \
-		flowcone_proc offload_rule dmesg_bad sfe_opt; do
+	# 逐项注入坏值：任何一项坏掉都必须让门禁变红
+	while IFS='|' read -r _ key _ _; do
+		[ -n "${key}" ] || continue
 		sed "s/^${key}	.*/${key}	BAD/" "${tmp}/good" >"${tmp}/bad"
 		if evaluate "${tmp}/bad" >/dev/null 2>&1; then
 			echo "FAIL self-test: 注入 ${key}=BAD 后判定仍然通过（门禁不会红）" >&2
 			bad=1
 		fi
-	done
+	done <<EOF
+$(printf '%s\n' "${EXPECTED}" | sed '/^$/d')
+EOF
 
-	grep -v '^luci_code' "${tmp}/good" >"${tmp}/missing"
-	if evaluate "${tmp}/missing" >/dev/null 2>&1; then
-		echo "FAIL self-test: 缺失 luci_code 证据仍然通过" >&2
-		bad=1
-	fi
+	# 逐项删证据：漏采集任何一项都必须变红，不能因为「没取到」被跳过
+	while IFS='|' read -r _ key _ _; do
+		[ -n "${key}" ] || continue
+		grep -v "^${key}	" "${tmp}/good" >"${tmp}/missing"
+		if evaluate "${tmp}/missing" >/dev/null 2>&1; then
+			echo "FAIL self-test: 缺失 ${key} 证据仍然通过" >&2
+			bad=1
+		fi
+	done <<EOF
+$(printf '%s\n' "${EXPECTED}" | sed '/^$/d')
+EOF
 
 	rm -rf "${tmp}"
 	[ "${bad}" -eq 0 ] || return 1
-	echo "ok  self-test: 好证据通过；逐项注入坏值、以及缺证据，判定都会红"
+	echo "ok  self-test: 好证据通过；逐项注入坏值、逐项删证据，判定都会红"
 }
 
 if [ "${SELFTEST}" -eq 1 ]; then
@@ -169,7 +177,6 @@ fi
 }
 
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-180}"
-CAP_TIMEOUT="${CAP_TIMEOUT:-90}"
 
 WORK="$(mktemp -d)"
 RUN="${WORK}/boot.raw"
@@ -198,7 +205,7 @@ case "${IMG}" in
 		exit 1
 	}
 	;;
-*) cp "${IMG}" >"${RUN}" ;;
+*) cp "${IMG}" "${RUN}" ;;  # 未压缩的 raw：直接复制（`cp src > dst` 是错的，会写成空文件）
 esac
 [ -s "${RUN}" ] || {
 	echo "ERROR: 镜像解压后为空: ${IMG}" >&2
@@ -225,14 +232,57 @@ exec 3>"${WORK}/console.in" || {
 
 send() { printf '%s\n' "$1" >&3; }
 
-wait_for() { # $1=固定串 $2=超时秒
-	local deadline=$((SECONDS + $2))
+# 注意：这里一律用 awk 单进程读日志，不用 `tr | grep -q`。
+# 脚本开了 set -o pipefail，而 `grep -q` 命中即退出会让上游 tr 收到 SIGPIPE（141），
+# 整条管道被判失败 —— 于是"明明已经出现"的哨兵被当成没出现，实测导致下发反复重试。
+wait_for() { # $1=固定串 $2=超时秒 $3=起始行（只在第 3 行之后找，重试用）
+	local from="${3:-1}" deadline=$((SECONDS + $2))
 	while [ "${SECONDS}" -lt "${deadline}" ]; do
-		grep -Fq "$1" "${LOG}" 2>/dev/null && return 0
+		awk -v want="$1" -v from="${from}" '
+			NR >= from { sub(/\r$/, ""); if (index($0, want)) { f = 1; exit } }
+			END { exit !f }' "${LOG}" 2>/dev/null && return 0
 		kill -0 "${QEMU_PID}" 2>/dev/null || return 1
 		sleep 1
 	done
 	return 1
+}
+
+take_value() { # $1=key $2=起始行：取最后一次出现的 R:<key>:<值>
+	tail -n "+${2:-1}" "${LOG}" 2>/dev/null | tr -d '\r' |
+		sed -n "s/^R:$1:\(.*\)$/\1/p" | tail -1
+}
+
+wait_exact() { # $1=整行固定串 $2=超时秒
+	local deadline=$((SECONDS + $2))
+	while [ "${SECONDS}" -lt "${deadline}" ]; do
+		awk -v want="$1" '
+			{ sub(/\r$/, "") }
+			$0 == want { f = 1; exit }
+			END { exit !f }' "${LOG}" 2>/dev/null && return 0
+		kill -0 "${QEMU_PID}" 2>/dev/null || return 1
+		sleep 1
+	done
+	return 1
+}
+
+wait_prefix() { # $1=行首固定串 $2=超时秒：值不固定的回执用行首匹配，避免命中回显的命令行
+	local deadline=$((SECONDS + $2))
+	while [ "${SECONDS}" -lt "${deadline}" ]; do
+		awk -v want="$1" '
+			{ sub(/\r$/, "") }
+			index($0, want) == 1 { f = 1; exit }
+			END { exit !f }' "${LOG}" 2>/dev/null && return 0
+		kill -0 "${QEMU_PID}" 2>/dev/null || return 1
+		sleep 1
+	done
+	return 1
+}
+
+fail() {
+	cp "${LOG}" /tmp/yunwrt-cap-fail.log 2>/dev/null || true
+	printf 'ERROR: %s\n' "$*" >&2
+	printf '（控制台日志已保留：/tmp/yunwrt-cap-fail.log）\n' >&2
+	exit 1
 }
 
 echo "[cap] image: ${IMG}"
@@ -243,41 +293,82 @@ if ! wait_for 'Please press Enter to activate this console.' "${BOOT_TIMEOUT}"; 
 	exit 1
 fi
 
+# 哨兵一律用引号拼接写（"CAP_""PROBE"）：串口 ECHO 关不掉时，回显出来的命令行里
+# 不会出现连续的 "CAP_PROBE" 字面量，只有真正执行后的输出才会。否则 wait_* 
+# 会命中自己的命令回显，直接误判成功。
 send ''
 sleep 2
-send 'echo CAP_PROBE'
-if ! wait_for 'CAP_PROBE' 10; then
+send 'echo "CAP_""PROBE"'
+if ! wait_exact 'CAP_PROBE' 10; then
 	send 'root'
 	sleep 2
-	send 'echo CAP_PROBE'
-	if ! wait_for 'CAP_PROBE' 15; then
+	send 'echo "CAP_""PROBE"'
+	if ! wait_exact 'CAP_PROBE' 15; then
 		echo "ERROR: 无法进入 guest shell" >&2
 		tail -n 30 "${LOG}" >&2
 		exit 1
 	fi
 fi
-echo "[cap] shell 就绪，采集证据 ..."
+echo "[cap] shell 就绪，关闭回显与输出换行处理，等 rcS 跑完再下发 ..."
 
+# -echo：不把输入的命令再回显一遍，日志干净、也减少串口双向流量。
+# -opost：关掉 tty 输出处理，否则超过 80 列的结果会被行规程插换行，把 R:key:value 拆成两行，
+#         host 侧按行解析就会漏掉（实测 R:xfer 被拆成 "R:" + "xfer:..."）。
+send 'stty -echo -opost 2>/dev/null; echo "CAP_TTY_""OK"'
+# 用整行精确匹配：回显的命令行里有 "echo CAP_TTY_OK"，模糊匹配会误判成功。
+if ! wait_exact 'CAP_TTY_OK' 20; then
+	tail -n 20 "${LOG}" >&2
+	fail "无法设置控制台 tty 模式"
+fi
+
+# 先等 rcS 结束。控制台横幅出现得比 rcS 启动还早，此刻 pgrep 找不到任何 rc.d 进程，
+# 会以为"已经跑完"而在 rcS 期间灌入数据 —— tty 输入缓冲只有 4KB，溢出就丢字节。
+# 所以先固定等一个基准时长，再确认 rc.d 进程确实清空。
+send 'sleep 75; while pgrep -f "/etc/rc.d/" >/dev/null 2>&1; do sleep 1; done; echo "R:rc:""done"'
+if ! wait_exact 'R:rc:done' 300; then
+	tail -n 20 "${LOG}" >&2
+	fail "300s 内 rcS 未结束"
+fi
+sleep 5
+
+# 控制台横幅出现时 rcS 还在跑：uci-defaults 未应用、uwsgi 未拉起、S99 的服务还没起。
+# 早期直接在此时采集会得到一片假失败（lan 还是 192.168.1.1、进程不在、HTTP 无响应）。
+# 落定闸必须和探针在同一个脚本里执行，原因见下面的串口长度说明。
 SNIPPET="$(cat <<'EOS'
+# --- 启动落定：flowcone 起来、WAN 拿到地址、且 TCX 已经 attach ---
+# 只等进程存在会在 attach 之前采集：实测 flowcone 08:42:38 启动、08:43:03 才 attach，
+# 中间 25 秒采集会得到 dmesg_bad=1(attach=0) 的假失败。attach 不会发生也要等满，
+# 这样报出来的是真实的「没 attach」而不是「采早了」。
+m=0
+while [ $m -lt 120 ]; do
+	pgrep -f "/usr/bin/flowcone" >/dev/null 2>&1 &&
+		ip -4 addr show $(uci -q get network.wan.device) 2>/dev/null | grep -q "inet " &&
+		logread 2>/dev/null | grep -qi 'flowcone.*attached' && break
+	m=$((m + 1))
+	sleep 1
+done
+echo "R:ready:$m/120"
+sleep 3
+
 echo CAP_BEGIN
 echo "R:lan_ip:$(uci -q get network.lan.ipaddr)"
 echo "R:lan_addr:$(ip -4 addr show br-lan 2>/dev/null | awk '/inet /{print $2; exit}')"
 echo "R:wan_addr:$(ip -4 addr show $(uci -q get network.wan.device 2>/dev/null || echo eth0) 2>/dev/null | awk '/inet /{print $2; exit}')"
-echo "R:luci_code:$( (uclient-fetch -q -O /dev/null -S http://127.0.0.1/ 2>&1 || wget -q -O /dev/null -S http://127.0.0.1/ 2>&1) | awk '/HTTP\//{print $2; exit}')"
-echo "R:port_range:$(sysctl -n net.ipv4.ip_local_port_range 2>/dev/null)"
-echo "R:mosdns953:$( (ss -lnup 2>/dev/null || netstat -lnup 2>/dev/null) | grep -c ':953')"
-echo "R:uci_defaults_left:$(ls /etc/uci-defaults 2>/dev/null | wc -l)"
+echo "R:luci_ui:$( s=$(curl -k -s --connect-timeout 5 --max-time 15 -o /tmp/.luci.html -w '%{http_code}' https://127.0.0.1/cgi-bin/luci/ 2>/dev/null); b=$(grep -ci luci /tmp/.luci.html 2>/dev/null); u=$(pgrep -x uhttpd >/dev/null 2>&1 && echo 1 || echo 0); ub=$(curl -k -s --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' -X POST https://127.0.0.1/ubus -d '{"jsonrpc":"2.0","id":1,"method":"list","params":["00000000000000000000000000000000"]}' 2>/dev/null); if [ "$s" = 200 ] || [ "$s" = 403 ]; then if [ "${b:-0}" -ge 1 ] && [ "$u" = 0 ] && [ "$ub" = 200 ]; then echo ok; else echo "fail:body=${b:-0},uhttpd=$u,ubus=$ub"; fi; else echo "fail:code=$s"; fi )"
+echo "R:port_range:$(sysctl -n net.ipv4.ip_local_port_range 2>/dev/null | tr -s '\t ' ' ' | sed 's/ *$//')"
+echo "R:mosdns953:$( n=$(netstat -lnup 2>/dev/null | awk '$4 ~ /:953$/ {c++} END{print c+0}'); case "$n" in ''|0) n=$(grep -ic ':03B9' /proc/net/udp 2>/dev/null);; esac; echo "${n:-0}" )"
+echo "R:uci_defaults_left:$( m=0; for f in /etc/init.d/swrt-vm-performance /etc/config/swrt-vm-performance /usr/bin/swrt-vm-perf /usr/libexec/yunwrt-mosdns-hotplug /usr/share/yunwrt/99-mosdns /etc/mosdns/yunwrt.yaml /etc/sysctl.d/90-yunwrt-x86-network.conf /etc/hotplug.d/iface/99-mosdns; do [ -e "$f" ] || m=1; done; n=$(ls /etc/uci-defaults 2>/dev/null | grep -cE '^(90-yunwrt-network-hooks|97-yunwrt-mosdns|98-swrt-vm-performance|99-x86-vm-network|99-yunwrt-upnpd)$'); if [ "$m" -eq 0 ]; then echo "$n"; else echo "overlay-missing"; fi )"
 echo "R:fw4_check:$(fw4 check >/dev/null 2>&1 && echo OK || echo FAIL)"
 echo "R:fw4_net_device:$(grep -c 'net.physdev || net.device' /usr/share/ucode/fw4.uc 2>/dev/null)"
 echo "R:upnpd_enabled:$(uci -q get upnpd.@upnpd[0].enabled)"
 echo "R:upnpd_ext_private:$(uci -q get upnpd.@upnpd[0].ext_allow_private_ipv4)"
-echo "R:upnp_relay:$(test -x /etc/init.d/upnp_nat_relay && echo present || echo missing)"
+echo "R:upnp_relay:$( if [ -x /etc/init.d/upnp_nat_relay ]; then pgrep -f 'upnp[-_]nat[-_]relay' >/dev/null 2>&1 && echo present || echo installed-not-running; else echo missing; fi )"
 echo "R:flowcone_pkg:$(apk list -I 2>/dev/null | grep -c '^flowcone')"
-echo "R:btf:$(test -e /sys/kernel/btf/vmlinux && echo yes || echo no)"
-echo "R:flowcone_proc:$(pgrep -f flowcone >/dev/null 2>&1 && echo yes || echo no)"
+echo "R:btf:$( if [ -e /sys/kernel/btf/vmlinux ]; then echo yes; elif [ -s /usr/lib/debug/boot/vmlinux ]; then echo detached; else echo no; fi )"
+echo "R:flowcone_proc:$(pgrep -f /usr/bin/flowcone >/dev/null 2>&1 && echo yes || echo no)"
 echo "R:offload_rule:$(nft list ruleset 2>/dev/null | grep -Eic 'flowtable|offload')"
-echo "R:dmesg_bad:$(dmesg 2>/dev/null | grep -iE 'flowcone|bpf' | grep -icE 'error|fail')"
-echo "R:sfe_opt:$(uci -q get firewall.@defaults[0].shortcut_fe 2>/dev/null || echo gone)"
+echo "R:dmesg_bad:$( a=$(logread 2>/dev/null | grep -i flowcone | grep -ic 'attached'); e=$(dmesg 2>/dev/null | grep -iE 'flowcone|bpf' | grep -icE 'error|fail'); if [ "${a:-0}" -ge 1 ] && [ "${e:-1}" -eq 0 ]; then echo 0; else echo "1(attach=$a,err=$e)"; fi )"
+echo "R:sfe_opt:$( command -v uci >/dev/null 2>&1 && command -v apk >/dev/null 2>&1 || { echo unknown; exit 0; }; uci -q show firewall >/dev/null 2>&1 || { echo unknown; exit 0; }; u=0; uci -q get firewall.@defaults[0].shortcut_fe >/dev/null 2>&1 && u=1; apk list -I 2>/dev/null | grep -qi 'shortcut-fe' && u=2; [ "$u" = 0 ] && echo gone || echo "present:$u" )"
 echo CAP_END
 EOS
 )"
@@ -287,18 +378,57 @@ if [ -n "${INJECT}" ]; then
 echo CAP_END}"
 fi
 
-printf '%s\n' "${SNIPPET}" | while IFS= read -r line; do
-	send "${line}"
-	# 串口是模拟的，发太快会丢字符（表现为命令被截断、$() 不展开）
-	sleep 0.25
+# 串口一次写长行会丢字节（实测：220 字节完整送达，500 字节起被截断成未闭合引号，
+# shell 停在 ">" 续行提示，后续命令全部不执行）。guest 也没有 busybox 的 base64 applet，
+# 只有 /usr/bin/openssl。所以把整个探针 base64 后按 64 字节分块写入，再用 openssl 解码，
+# 并用 md5 校验解码结果；不符就重发（最多 3 次），绝不带着残缺探针往下判定。
+md5_of() { if command -v md5 >/dev/null 2>&1; then md5 -q; else md5sum | awk '{print $1}'; fi; }
+B64="$(printf '%s' "${SNIPPET}" | base64 | tr -d '\n')"
+WANT_SUM="$(printf '%s' "${SNIPPET}" | md5_of)"
+# 注意用字节数：${#SNIPPET} 是字符数，探针里含中文注释，两者不相等
+SBYTES="$(printf '%s' "${SNIPPET}" | wc -c | tr -d ' ')"
+CHUNK=160
+ATTEMPT=1
+XFER_OK=0
+while [ "${ATTEMPT}" -le 3 ]; do
+	kill -0 "${QEMU_PID}" 2>/dev/null || fail "QEMU 已退出，无法下发探针"
+	# macOS 的 wc -l 会输出前导空格，直接拼进 tail -n 会变成非法参数而静默失败
+	MARK="$(wc -l <"${LOG}" | tr -d ' ')"
+	send 'rm -f /tmp/cap.b64 /tmp/cap.sh'
+	i=0
+	while [ "${i}" -lt "${#B64}" ]; do
+		send "printf '%s' '${B64:${i}:${CHUNK}}'>>/tmp/cap.b64"
+		i=$((i + CHUNK))
+		sleep 0.3
+	done
+	send "openssl base64 -d -A -in /tmp/cap.b64 -out /tmp/cap.sh; echo \"R:x\"\"fer:\$(md5sum /tmp/cap.sh 2>/dev/null | cut -d' ' -f1)|\$(wc -c </tmp/cap.sh)|\$(wc -c </tmp/cap.b64)\""
+	if wait_for 'R:xfer:' 180 "${MARK}"; then
+		GOT="$(take_value xfer "${MARK}")"
+		GOT_SUM="${GOT%%|*}"
+		GOT_DEC="${GOT#*|}"; GOT_DEC="${GOT_DEC%%|*}"
+		GOT_B64="${GOT##*|}"
+		if [ "${GOT_DEC}" = "${SBYTES}" ] && [ "${GOT_B64}" = "${#B64}" ] &&
+			{ [ -z "${GOT_SUM}" ] || [ "${GOT_SUM}" = "${WANT_SUM}" ]; }; then
+			XFER_OK=1
+			break
+		fi
+		echo "[cap] 警告：第 ${ATTEMPT} 次下发校验不符（${GOT}；期望 md5=${WANT_SUM} 脚本=${SBYTES}B b64=${#B64}B），重发" >&2
+	else
+		echo "[cap] 警告：第 ${ATTEMPT} 次下发无回执，重发" >&2
+	fi
+	ATTEMPT=$((ATTEMPT + 1))
 done
+[ "${XFER_OK}" -eq 1 ] || fail "探针下发 3 次均未通过 md5 校验，串口不可靠（期望 ${WANT_SUM}）"
+send 'sh /tmp/cap.sh'
 
-if ! wait_for 'CAP_END' "${CAP_TIMEOUT}"; then
-	echo "ERROR: ${CAP_TIMEOUT}s 内未采集完证据，日志尾部：" >&2
-	tail -n 40 "${LOG}" >&2
-	exit 1
+PROBE_TIMEOUT="${PROBE_TIMEOUT:-420}"
+if ! wait_exact 'CAP_END' "${PROBE_TIMEOUT}"; then
+	tail -n 30 "${LOG}" >&2
+	fail "${PROBE_TIMEOUT}s 内未采集完证据"
 fi
 sleep 1
+
+echo "[cap] 启动落定：$(take_value ready)（rc.d/服务等待秒数）"
 
 : >"${RESULTS}"
 # 只认「行首就是 R:」的输出行；回显出来的命令行（echo "R:...$(...)"）不算证据
@@ -308,4 +438,10 @@ sed -n '/CAP_BEGIN/,/CAP_END/p' "${LOG}" | tr -d '\r' |
 echo "[cap] 证据："
 sed 's/^/    /' "${RESULTS}"
 
-evaluate "${RESULTS}"
+# 判定失败时保留现场：否则 cleanup 会把 WORK 一起删掉，事后无从复核
+if ! evaluate "${RESULTS}"; then
+	cp "${LOG}" /tmp/yunwrt-cap-fail.log 2>/dev/null || true
+	cp "${RESULTS}" /tmp/yunwrt-cap-results.tsv 2>/dev/null || true
+	printf '（控制台日志：/tmp/yunwrt-cap-fail.log；证据表：/tmp/yunwrt-cap-results.tsv）\n' >&2
+	exit 1
+fi

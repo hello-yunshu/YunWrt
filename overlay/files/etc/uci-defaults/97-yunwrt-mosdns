@@ -1,0 +1,45 @@
+#!/bin/sh
+# 首次启动把 mosdns 拉起到可判定可用的状态：监听 127.0.0.1:953。
+#
+# 背景：luci-app-mosdns 默认 enabled=0；即使打开，它的 init 脚本也会生成
+# /var/etc/mosdns.json，而 mosdns 5.3.4 不认其中的 log.size，直接 FATAL。
+# 这里改成指向自带配置 /etc/mosdns/yunwrt.yaml（init 脚本对非默认路径不做生成）。
+
+# 这里一律 exit 1 而不是 exit 0：uci-defaults 成功即被删除，
+# 静默放过等于"mosdns 悄悄没起来"，只有丢出非 0 才会保留脚本、下轮重试。
+[ -f /etc/config/mosdns ] || {
+	echo "ERROR: /etc/config/mosdns missing（luci-app-mosdns 未安装）" >&2
+	exit 1
+}
+[ -f /etc/mosdns/yunwrt.yaml ] || {
+	echo "ERROR: /etc/mosdns/yunwrt.yaml missing" >&2
+	exit 1
+}
+[ -x /etc/init.d/mosdns ] || {
+	echo "ERROR: /etc/init.d/mosdns missing（mosdns 未安装）" >&2
+	exit 1
+}
+
+uci -q batch <<EOF
+set mosdns.config.enabled='1'
+set mosdns.config.configfile='/etc/mosdns/yunwrt.yaml'
+EOF
+uci -q commit mosdns
+
+# 回读确认：commit 失败不会体现在 restart 的返回码里。
+[ "$(uci -q get mosdns.config.enabled)" = "1" ] || {
+	echo "ERROR: mosdns.config.enabled 回读非 1" >&2
+	exit 1
+}
+[ "$(uci -q get mosdns.config.configfile)" = "/etc/mosdns/yunwrt.yaml" ] || {
+	echo "ERROR: mosdns.config.configfile 回读不符" >&2
+	exit 1
+}
+
+/etc/init.d/mosdns enable
+/etc/init.d/mosdns restart || {
+	echo "ERROR: mosdns failed to start" >&2
+	exit 1
+}
+
+exit 0
