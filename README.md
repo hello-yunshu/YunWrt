@@ -21,9 +21,10 @@
 ```
 YunWrt-x86-64-<上游版本>-<日期>-ext4-combined-efi.img.gz
 YunWrt-x86-64-<上游版本>-<日期>-squashfs-combined-efi.img.gz
+YunWrt-x86-64-<上游版本>-<日期>-ext4-combined-efi.vhdx.gz
 ```
 
-每个 `.img.gz` 旁有对应 `.sha256`。每次构建另写 `build-log/<时间>-<commit>.json`（包清单与版本快照，只做排障线索，不参与门禁）。
+前两个是物理机/U 盘可写的原始镜像，也是 PVE、VMware 等平台做转换的底图；`.vhdx.gz` 是 Hyper-V 的动态虚拟磁盘，解压后直接挂到虚拟机上。每个文件旁有对应 `.sha256`；每次构建另写 `build-log/<时间>-<commit>.json`（包清单与版本快照，只做排障线索，不参与门禁）。
 
 能力验收（QEMU 起镜像查 18 项）：
 

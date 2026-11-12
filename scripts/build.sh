@@ -125,6 +125,20 @@ for f in "${ROOT_DIR}"/build/artifact/YAOF-*; do
 	echo "    $(basename "$n")"
 done
 
+# Hyper-V 动态 VHDX：ImageBuilder 不带 qemu-img，VHDX_IMAGES 又默认关闭，
+# 只能从 ext4 原始镜像自行转换。口径对齐 SWrt：只做 ext4，gzip 后发布。
+vhdx_src="$(ls -1 "${ROOT_DIR}"/build/artifact/YunWrt-*-ext4-combined-efi.img.gz 2>/dev/null | head -1)"
+[ -n "${vhdx_src}" ] || die "找不到 ext4 镜像，无法生成 VHDX"
+command -v qemu-img >/dev/null 2>&1 || die "缺少 qemu-img，无法生成 VHDX（Debian/Ubuntu 装 qemu-utils）"
+vhdx="${vhdx_src%.img.gz}.vhdx"
+raw="${ROOT_DIR}/build/.vhdx-src.img"
+gunzip -c "${vhdx_src}" > "${raw}"
+qemu-img convert -f raw -O vhdx -o subformat=dynamic "${raw}" "${vhdx}"
+rm -f "${raw}"
+gzip -9 -n "${vhdx}"
+sha256 "${vhdx}.gz" > "${vhdx}.gz.sha256"
+echo "    $(basename "${vhdx}.gz")"
+
 FEED_SHA="$(curl -fsSL --retry 3 "https://qiusimons.github.io/OpenWrt-Add/x86_64/packages.adb" 2>/dev/null | sha256 | awk '{print $1}' || true)"
 ARTIFACT="$(basename "$(ls -1 "${ROOT_DIR}"/build/artifact/YunWrt-*.img.gz 2>/dev/null | head -1)")"
 

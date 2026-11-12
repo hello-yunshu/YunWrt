@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
             build-essential libncurses-dev gawk gettext libssl-dev unzip \
-            rsync zstd file wget curl ca-certificates jq python3 swig cpio
+            rsync zstd file wget curl ca-certificates jq python3 swig cpio qemu-utils
 
       - name: 同步上游 YAOF
         run: bash scripts/sync-upstream.sh
@@ -73,9 +73,9 @@ jobs:
           date="$(date -u +%Y-%m-%d)"
           tag="X86-${ver}"
           cd build/artifact
-          sha256sum YunWrt-*.img.gz > "X86-${date}-${ver}.sha256sum"
+          sha256sum YunWrt-*.img.gz YunWrt-*.vhdx.gz > "X86-${date}-${ver}.sha256sum"
           cat "X86-${date}-${ver}.sha256sum"
-          assets=(YunWrt-*.img.gz "X86-${date}-${ver}.sha256sum")
+          assets=(YunWrt-*.img.gz YunWrt-*.vhdx.gz "X86-${date}-${ver}.sha256sum")
           if gh release view "${tag}" >/dev/null 2>&1; then
             # 同一上游版本重发：只替换资产，不动 tag
             gh release upload "${tag}" "${assets[@]}" --clobber
