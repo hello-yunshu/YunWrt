@@ -2,6 +2,14 @@ name: build
 
 on:
   workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "nightly 只传 Actions artifact；release 额外建 tag 与 Release"
+        type: choice
+        options:
+          - nightly
+          - release
+        default: nightly
   schedule:
     - cron: "0 18 * * *" # UTC 18:00 = 北京 02:00
   push:
@@ -15,6 +23,9 @@ on:
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: false
+
+permissions:
+  contents: write # release 模式要建 tag 与 Release
 
 jobs:
   build:
@@ -44,3 +55,32 @@ jobs:
             build/artifact/*
             build-log/*.json
           if-no-files-found: error
+
+      # 规则对齐 SWrt：tag 为 <平台>-<上游版本>，Release 名带产品名，
+      # 不是 prerelease，正文留空；只有 release 模式才建，nightly 只留 artifact。
+      - name: 创建或更新 Release
+        if: inputs.build_mode == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ver="$(jq -r '.openwrt_version' "$(ls -1 build-log/*.json | tail -1)")"
+          [ -n "${ver}" ] && [ "${ver}" != "null" ]
+          date="$(date -u +%Y-%m-%d)"
+          tag="X86-${ver}"
+          cd build/artifact
+          sha256sum YunWrt-*.img.gz > "X86-${date}-${ver}.sha256sum"
+          cat "X86-${date}-${ver}.sha256sum"
+          assets=(YunWrt-*.img.gz "X86-${date}-${ver}.sha256sum")
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            # 同一上游版本重发：只替换资产，不动 tag
+            gh release upload "${tag}" "${assets[@]}" --clobber
+          else
+            gh release create "${tag}" "${assets[@]}" \
+              --title "YunWrt-${ver}" \
+              --target "${GITHUB_SHA}" \
+              --notes-file /dev/null \
+              --latest
+          fi
+          gh release view "${tag}" --json tagName,isDraft,isPrerelease,assets \
+            --jq '"release \(.tagName) draft=\(.isDraft) prerelease=\(.isPrerelease)"'
