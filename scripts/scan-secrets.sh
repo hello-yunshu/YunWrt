@@ -22,6 +22,10 @@ trap 'rm -f "${HITS}"' EXIT
 # 模板/占位/GitHub Actions 的 secrets 引用不算命中
 ALLOW_RE='\$\{\{|GITHUB_TOKEN|your_|example\.(com|org)|CHANGEME|placeholder|REDACTED|<[A-Za-z_-]+>'
 
+# 知名公共 DNS 解析器的 DoT/DoH 地址是基础设施配置，不是凭据。
+# 仅在带显式 scheme 时放行；裸 IP 仍然命中，避免顺带放过订阅服务器地址。
+DNS_RESOLVER_ALLOW_RE='(tls|https|quic|h3)://(1\.1\.1\.1|1\.0\.0\.1|8\.8\.8\.8|8\.8\.4\.4|9\.9\.9\.9|149\.112\.112\.112|223\.5\.5\.5|223\.6\.6\.6|119\.29\.29\.29|114\.114\.114\.114)([^0-9.]|$)'
+
 # name | ERE
 PATTERNS=(
 	'私钥|-----BEGIN [A-Z ]*PRIVATE KEY-----'
@@ -66,7 +70,7 @@ judge_file() {
 			if (octets_ok(ip) && !is_priv(ip)) { bad = 1 }
 		}
 		if (bad) print
-	}' "${lines}" | grep -vE -- "${ALLOW_RE}" |
+	}' "${lines}" | grep -vE -- "${ALLOW_RE}" | grep -vE -- "${DNS_RESOLVER_ALLOW_RE}" |
 		while IFS= read -r l; do hit '公网 IPv4' "${l}"; done
 
 	# 公网 IPv6：只看 2000::/3（当前全球单播分配段），天然排除时间戳、fe80::、fc00::、ff02::
