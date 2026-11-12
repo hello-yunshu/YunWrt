@@ -32,6 +32,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
+      # checkout 内部会跑 git init；不设默认分支名的话每次都会打一串 hint
+      - name: 设定 git 默认分支名
+        run: git config --global init.defaultBranch main
+
       - uses: actions/checkout@v7
 
       - name: 依赖
