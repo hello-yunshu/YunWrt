@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/init.d/openclash-dns-guard",
+  "asserts": [],
+  "reason": "OpenClash DNS 守护的 procd 服务定义（START=96，respawn）",
+  "owner": "yunwrt"
+}

@@ -35,3 +35,13 @@ ubus call service list '{"name":"openclash"}' | jsonfilter -e '@.openclash.insta
 - feed 回退到 `< 0.48.002` 或被打上坏版本：构建直接失败，不会出镜像。
 - 门禁在构建期执行，不受设备 `apk upgrade` 影响，每次构建都重新复核。
 - 上游若重构探测写法（不再出现 `instances.openclash.*`），门禁会硬失败，需要人工确认行为后更新断言，对齐 D9 的"不静默降级"。
+
+## 与本仓库 openclash-dns-guard 的关系
+
+`/usr/sbin/openclash-dns-guard.sh` 是 YunWrt 自己的 overlay 文件，不是 OpenClash 包的一部分，也不是上面这个门禁的校验对象：
+
+- 它解决的是另一件事：653 连续不可用时把 dnsmasq 上游临时切到 mosdns(953)，恢复后按降级前记录的原值回填并回读校验。
+- 与上游看门狗会正面冲突：设备 `enable_redirect_dns=1`，看门狗循环每 60s 执行一次 "Force Reset DNS Hijack"，把 `dhcp.@dnsmasq[0].server` 强写回 `127.0.0.1#653` 并 `restart dnsmasq`（见 `openclash_watchdog.sh` 的 `Force Reset DNS Hijack` 分支）。dns-guard 若只改 UCI 不压制它，两边会来回拉锯。
+- 现有做法：dns-guard 在降级期间对 `openclash_watchdog.sh` 进程 `SIGSTOP`，恢复、收到 TERM/INT、被 procd 重拉三种情况都 `SIGCONT`；被冻结的 pid 记在 `/var/run/openclash-dns-guard.state` 的 `WD_STOPPED` 里，新进程启动时若发现该字段但当前不在降级态，会先按 `/proc/<pid>/cmdline` 校验再放行，避免 pid 复用误杀。
+- 门禁分工：本文件里的 `check-openclash-watchdog.sh` 管**包内**看门狗的版本；`scripts/check-dns-guard.sh` 管 **overlay 的 dns-guard**（脚本/init.d/config/uci-defaults）确实进了 rootfs、权限与默认配置正确。manifest 核对只覆盖 apk 包，不能替代后者。
+

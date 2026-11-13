@@ -1,0 +1,20 @@
+
+config guard 'main'
+	option enabled '1'
+	# Bark 推送 key：不写入仓库，首次部署后用
+	#   uci set openclash-dns-guard.main.bark_key='<key>'
+	#   uci commit openclash-dns-guard
+	# 配置（留空时脚本会在日志里明确报错，不再静默跳过通知）
+	option bark_key ''
+	option bark_group 'openwrt'
+	option notify_on_fallback '1'
+	option notify_on_recover '1'
+	option notify_on_severe '1'
+	option probe_interval '15'
+	option primary_port '653'
+	option fallback_port '953'
+	option suspend_watchdog '1'
+	option manage_ip_rule '1'
+	option ip_rule_mark '0x162'
+	option ip_rule_table '0x162'
+	option ip_rule_pref '1888'

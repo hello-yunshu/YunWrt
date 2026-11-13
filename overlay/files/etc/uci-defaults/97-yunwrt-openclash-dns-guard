@@ -1,0 +1,37 @@
+#!/bin/sh
+# 首次启动启用 openclash-dns-guard，并让本次启动立即生效。
+#
+# 背景：/etc/init.d/openclash-dns-guard 来自 rootfs overlay，不是 apk 包，
+# START=96 不会自己生成 /etc/rc.d/S96openclash-dns-guard，overlay 里也没有
+# 这个符号链接。这里走与 98-swrt-vm-performance 相同的 uci-defaults 机制：
+#   - enable 生成 /etc/rc.d/S96openclash-dns-guard（之后每次开机自启）
+#   - start  让首次启动本轮也立即巡检
+# 执行成功后 uci-defaults 会自动移除本脚本，不影响后续升级与用户已有配置。
+#
+# 与上游 OpenClash 看门狗的关系（不是同一个东西）：
+#   /usr/share/openclash/openclash_watchdog.sh 由 luci-app-openclash 包提供，
+#   版本由 scripts/check-openclash-watchdog.sh 门禁；enable_redirect_dns=1 时
+#   它每 60s 执行一次 "Force Reset DNS Hijack"，把 dnsmasq 上游强写回
+#   127.0.0.1#653 并 restart dnsmasq。dns-guard 降级期间必须用 SIGSTOP 压住它，
+#   恢复/退出/被 procd 重拉时再 SIGCONT。
+
+die() {
+	echo "ERROR: $*" >&2
+	exit 1
+}
+
+# 缺失就 exit 1 保留脚本重试：静默 exit 0 会让"overlay 没进镜像"看起来像成功。
+[ -x /usr/sbin/openclash-dns-guard.sh ] || die "/usr/sbin/openclash-dns-guard.sh 缺失或不可执行，overlay 未进镜像"
+[ -f /etc/config/openclash-dns-guard ] || die "/etc/config/openclash-dns-guard 缺失，overlay 未进镜像"
+[ -x /etc/init.d/openclash-dns-guard ] || die "/etc/init.d/openclash-dns-guard 缺失或不可执行，overlay 未进镜像"
+
+/etc/init.d/openclash-dns-guard enable || die "enable 失败"
+# enable 的产物是 rc.d 链接，必须回读；否则重启后服务不会再跑
+[ -e /etc/rc.d/S96openclash-dns-guard ] || die "enable 后 /etc/rc.d/S96openclash-dns-guard 不存在"
+
+# bark_key 为空不影响守护本体：启动时日志里报一行 ERROR，降级/恢复时记
+# "NOT sending" 且不入队，不会按轮询周期刷屏。
+/etc/init.d/openclash-dns-guard start ||
+	echo "WARNING: 首次 start 返回非 0，已由 /etc/rc.d/S96openclash-dns-guard 在本次启动稍后重试" >&2
+
+exit 0

@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/uci-defaults/97-yunwrt-openclash-dns-guard",
+  "asserts": [],
+  "reason": "首次启动 enable openclash-dns-guard，生成 rc.d 链接使其开机自启",
+  "owner": "yunwrt"
+}
