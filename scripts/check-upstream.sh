@@ -11,9 +11,10 @@ ok() { printf '  ok  %s\n' "$*"; }
 bad() { printf '  FAIL %s\n' "$*" >&2; FAILS=$((FAILS + 1)); }
 
 echo "==> 目录形态"
-for p in scripts/build.sh profiles/packages.common profiles/packages.x86_64 \
-	files/etc/rc.local files/etc/hotplug.d/net/01-maximize_nic_rx_tx_buffers \
-	files/etc/sysctl.d/99-zram.conf; do
+# 上游 25.12 自 1139ab0 起删除了 files/（rc.local、NIC buffer、zram sysctl 迁入 system-addon
+# 包），不再要求它存在；我们真正依赖的是 ImageBuilder 入口、包清单，以及 build.sh 对
+# files/ 的叠加能力（overlay/files 靠它进 rootfs）。
+for p in scripts/build.sh profiles/packages.common profiles/packages.x86_64; do
 	[ -e "${U}/${p}" ] && ok "${p}" || bad "${p} 缺失"
 done
 
@@ -37,6 +38,15 @@ check_lit "${B}" 'profiles/${PACKAGES_PROFILE}' '读取 profiles/${PACKAGES_PROF
 check_lit "${B}" 'FILES="$OVERLAY_DIR"' '支持 FILES= 覆盖目录'
 check_lit "${B}" 'ROOTFS_PARTSIZE=' '设置 ROOTFS_PARTSIZE'
 check_lit "${B}" '*combined-efi.img.gz' 'x86 产物匹配 combined-efi.img.gz'
+
+echo "==> 定制承载（files 叠加 + system-addon）"
+check_lit "${B}" 'if [ -d "${ROOT_DIR}/files" ]' 'build.sh 仍支持叠加 files/'
+check_lit "${B}" 'cp -af "${ROOT_DIR}/files/."' 'build.sh 仍把 files/ 拷进 rootfs'
+if grep -qE '^system-addon([[:space:]]|$)' "${U}/profiles/packages.common"; then
+	ok 'profiles.common 仍包含 system-addon（NIC/zram/内核调优）'
+else
+	bad 'profiles.common 不再包含 system-addon（NIC/zram 调优会静默消失）'
+fi
 
 if [ -f "${ROOT_DIR}/upstream/yaof.commit" ]; then
 	printf '  ok  upstream/yaof.commit = %s\n' "$(cat "${ROOT_DIR}/upstream/yaof.commit")"

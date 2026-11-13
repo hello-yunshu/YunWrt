@@ -108,6 +108,8 @@ openssh-sftp-server
 
 # --- 对齐现网 LuCI 集合（2026-11-13 审计）：现网 21 个之外的一律不进镜像 ---
 # 保留 flowcone（SFE 替代定案，qemu ⑧ 与能力清单 27 行绑定）
+# 主题跟随上游默认：system-addon 的 99-default-settings 把 mediaurlbase 指向 vantage，
+# 因此 luci-theme-vantage 及其 i18n 不砍，否则默认样式表 404。
 -luci-app-3cat
 -luci-i18n-3cat-zh-cn
 -luci-app-airconnect
@@ -134,5 +136,3 @@ openssh-sftp-server
 -luci-i18n-vantage-zh-cn
 -luci-app-zerotier
 -luci-i18n-zerotier-zh-cn
--luci-theme-vantage
--luci-i18n-vantage-theme-zh-cn

@@ -18,7 +18,7 @@ command -v jq >/dev/null 2>&1 || { echo "FAIL jq 不可用，无法校验 meta.j
 echo "==> 每个 overlay 文件必须有 .meta.json"
 while IFS= read -r f; do
 	rel="${f#"${ROOT_DIR}/overlay/files/"}"
-	case "$rel" in .gitkeep | *.meta.json) continue ;; esac
+	case "$rel" in .gitkeep | *.DS_Store | *.meta.json) continue ;; esac
 	[ -f "${f}.meta.json" ] || bad "缺少元数据：overlay/files/${rel}.meta.json"
 done < <(find "${ROOT_DIR}/overlay/files" -type f | sort)
 

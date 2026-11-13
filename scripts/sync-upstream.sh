@@ -17,7 +17,9 @@ echo "==> 拉取 ${REPO} (${BRANCH})"
 git clone --quiet --depth 1 --branch "${BRANCH}" "${REPO}" "${TMP}/yaof" || die "clone 失败"
 
 # 防呆：确认上游仍是 ImageBuilder 形态。形态一变就先停下来看 check-upstream.sh。
-for p in scripts/build.sh profiles/packages.common profiles/packages.x86_64 files; do
+# 上游 25.12 自 1139ab0 起不再携带 files/（定制迁到 system-addon 包），这里只校验
+# 我们实际消费的入口；files/ 叠加仍由上游 build.sh 的 `if [ -d files ]` 兼容。
+for p in scripts/build.sh profiles/packages.common profiles/packages.x86_64; do
 	[ -e "${TMP}/yaof/${p}" ] || die "上游缺少 ${p}，形态已变"
 done
 

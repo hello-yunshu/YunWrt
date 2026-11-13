@@ -18,21 +18,20 @@ has_files() { [ -n "$(find "$1" -type f ! -name '.gitkeep' -print -quit 2>/dev/n
 
 echo "==> 叠加 rootfs 覆盖（.meta.json 是校验元数据，不进镜像）"
 if has_files "${ROOT_DIR}/overlay/files"; then
-	rsync -a --exclude='*.meta.json' --exclude='.gitkeep' \
+	rsync -a --exclude='*.meta.json' --exclude='.gitkeep' --exclude='.DS_Store' \
 		"${ROOT_DIR}/overlay/files/" "${BUILD}/files/"
 fi
 
 echo "==> 断言：overlay 提供的 init / uci-defaults / hotplug 脚本必须可执行"
 # 只校验 overlay/files 里的文件：init.d 由 procd 直接 exec、uci-defaults 由 /etc/init.d/boot
 # 逐个 source，hotplug.d 由 hotplug-call source，后两者虽不强制 +x，但我们自己的脚本一律 755，
-# 一旦丢失就是打包失误。上游自带的（如 hotplug.d/net/01-maximize_nic_rx_tx_buffers）是 644，
-# 不属于我们的责任范围，扫全树会误伤并让构建中断。
+# 一旦丢失就是打包失误。上游自带的（不在 overlay/files 里）权限不归我们管，扫全树会误伤。
 bad=""
 if [ -d "${ROOT_DIR}/overlay/files" ]; then
 	while IFS= read -r f; do
 		rel="${f#"${ROOT_DIR}/overlay/files/"}"
 		[ -x "${BUILD}/files/${rel}" ] || bad="${bad} ${rel}"
-	done < <(find "${ROOT_DIR}/overlay/files" -type f ! -name '*.meta.json' ! -name '.gitkeep' \
+	done < <(find "${ROOT_DIR}/overlay/files" -type f ! -name '*.meta.json' ! -name '.gitkeep' ! -name '.DS_Store' \
 		\( -path '*/etc/uci-defaults/*' -o -path '*/etc/init.d/*' -o -path '*/etc/hotplug.d/*' \) 2>/dev/null)
 fi
 [ -z "${bad}" ] || die "以下脚本缺少可执行位：${bad}"
@@ -63,8 +62,13 @@ done
 echo "==> 组装断言"
 rej="$(find "${BUILD}" -name '*.rej' -print)"
 [ -z "${rej}" ] || die "存在 .rej 文件：${rej}"
-for p in scripts/build.sh profiles/packages.common profiles/packages.x86_64 files/etc/rc.local; do
+for p in scripts/build.sh profiles/packages.common profiles/packages.x86_64; do
 	[ -e "${BUILD}/${p}" ] || die "组装后缺少 ${p}"
 done
+# 上游 25.12 已不带 files/etc/rc.local（定制迁入 system-addon 包），改验我们的 overlay
+# 是否真的落进了 build/files，避免上游 build.sh 不再叠加 files/ 时静默丢文件。
+if has_files "${ROOT_DIR}/overlay/files"; then
+	[ -e "${BUILD}/files" ] || die "overlay/files 未叠加进 build/files"
+fi
 
 echo "==> build/ 就绪"
