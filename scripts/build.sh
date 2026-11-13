@@ -62,7 +62,9 @@ prepare_imagebuilder() {
 		if grep -q "^${key}=" "$file"; then
 			sed -i.bak "s|^${key}=.*|${key}=${val}|" "$file" && rm -f "${file}.bak"
 		else
-			printf '%s=%s\n' "$key" "$val" >> "$file"
+			# ImageBuilder 不附带 Kconfig（无 config/*.in），无法回溯定义；键不在自带
+			# .config 里基本只意味着上游改名。追加无效键会静默回退默认值，所以直接停。
+			die "IB .config 中没有 ${key}，上游可能已更名（拒绝追加无效键）"
 		fi
 		grep -qx "${key}=${val}" "$file" || die "写入 ${key}=${val} 失败"
 	}
@@ -210,6 +212,16 @@ for p in ${EXPECTED}; do
 done
 [ -z "${missing}" ] || die "manifest 中缺少：${missing}"
 
+# 反向核对：显式移除的包（-pkg）必须真的不在 manifest 里。只从 EXPECTED 里划掉
+# 不算验证——上游一旦不认 `-` 语法，这些包会静默留在镜像里。
+removed_present=""
+for p in ${REMOVED}; do
+	if grep -qE "^${p} - " "${MANIFEST}"; then
+		removed_present="${removed_present} ${p}"
+	fi
+done
+[ -z "${removed_present}" ] || die "显式移除的包仍在镜像里：${removed_present}（-pkg 语法可能已失效）"
+
 # 产物改名：上游产物固定带 YAOF 前缀
 for f in "${ROOT_DIR}"/build/artifact/YAOF-*; do
 	[ -e "${f}" ] || continue
@@ -227,6 +239,11 @@ command -v qemu-img >/dev/null 2>&1 || die "缺少 qemu-img，无法生成 VHDX�
 vhdx="${vhdx_src%.img.gz}.vhdx"
 raw="${ROOT_DIR}/build/.vhdx-src.img"
 gunzip -c "${vhdx_src}" > "${raw}"
+# 唯一能证明 .config 与模板改写真落到产物的检查：从 p1 读 grub.cfg、从 GPT 读分区尺寸。
+if ! bash "${ROOT_DIR}/scripts/check-artifact.sh" "${raw}"; then
+	rm -f "${raw}"
+	die "产物回查失败"
+fi
 qemu-img convert -f raw -O vhdx -o subformat=dynamic "${raw}" "${vhdx}"
 rm -f "${raw}"
 gzip -9 -n "${vhdx}"
