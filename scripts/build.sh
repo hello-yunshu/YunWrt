@@ -69,6 +69,77 @@ prepare_imagebuilder() {
 	set_ib_config CONFIG_TARGET_KERNEL_PARTSIZE 64
 	set_ib_config CONFIG_TARGET_ROOTFS_PARTSIZE 1024
 
+	# p1 里的 grub.cfg 必须与设备原版逐字段一致：sysupgrade 会整块重写 p1，
+	# 镜像那份会直接顶掉现网（title/yunshu、timeout=0、无 console=、mitigations=off）。
+	# .config 只能给 title/timeout/bootopts；CONFIG_GRUB_CONSOLE=y 是保住
+	# 「terminal_input console serial」的必要条件，但它会无条件往内核 cmdline 塞
+	# console=tty1 与 console=ttyS0,115200n8，所以模板与 Makefile 也得改。
+	set_ib_config CONFIG_GRUB_CONSOLE y
+	set_ib_config CONFIG_GRUB_TITLE '"yunshu"'
+	set_ib_config CONFIG_GRUB_TIMEOUT '"0"'
+	set_ib_config CONFIG_GRUB_BOOTOPTS '"mitigations=off"'
+	set_ib_config CONFIG_GRUB_BAUDRATE 115200
+
+	# 选解包后的 ImageBuilder 目录这一层：Build/grub-config 是 p1 中 grub.cfg 的唯一来源。
+	# files/ 只进 rootfs，不参与 p1 的 FAT 生成；后处理 p1 则要重写 FAT 并重算校验，
+	# 既容易破坏 GPT/FAT，也让镜像不再由构建系统直接产出。
+	align_ib_grub() {
+		local img="$1/target/linux/x86/image" mk tpl
+		mk="${img}/Makefile"
+
+		# ① 内核 cmdline 不注入 console=：把拼 console 参数的那行整行清空。
+		#    GRUB_TERMINALS 仍含 console，grub 自身的双终端输出不受影响。
+		sed -i.bak 's|^GRUB_CONSOLE_CMDLINE += console=.*$|GRUB_CONSOLE_CMDLINE :=|' "${mk}"
+		rm -f "${mk}.bak"
+		grep -qx 'GRUB_CONSOLE_CMDLINE :=' "${mk}" ||
+			die "grub 补丁失败：未能清空 GRUB_CONSOLE_CMDLINE（上游 Makefile 可能已变）"
+
+		# ② @CMDLINE@ 用 strip，避免 BOOTOPTS 为空时渲染出尾随空格。
+		sed -i.bak 's|s#@CMDLINE@#$(BOOTOPTS) $(GRUB_CONSOLE_CMDLINE)#g|s#@CMDLINE@#$(strip $(BOOTOPTS) $(GRUB_CONSOLE_CMDLINE))#g|' "${mk}"
+		rm -f "${mk}.bak"
+		grep -q 's#@CMDLINE@#$(strip ' "${mk}" ||
+			die "grub 补丁失败：@CMDLINE@ 未改成 strip"
+
+		# ③ 模板里 @CMDLINE@ 移到 noinitrd 之后，与设备原文顺序一致。
+		for tpl in "${img}/grub-efi.cfg" "${img}/grub-pc.cfg"; do
+			sed -i.bak \
+				-e 's|@GPT_ROOTPART@ @CMDLINE@ noinitrd|@GPT_ROOTPART@ noinitrd @CMDLINE@|' \
+				-e 's|@ROOTPART@ @CMDLINE@ noinitrd|@ROOTPART@ noinitrd @CMDLINE@|' "${tpl}"
+			rm -f "${tpl}.bak"
+			grep -qE '@(GPT_)?ROOTPART@ noinitrd @CMDLINE@' "${tpl}" ||
+				die "grub 补丁失败：$(basename "${tpl}") 的 @CMDLINE@ 顺序未调整"
+		done
+
+		# 渲染结果必须与设备原版逐字节一致（唯一预期差异是镜像自己的 PARTUUID）。
+		# 这里用同一组占位符做一次离线渲染，早失败优于发布后才发现 p1 被顶掉。
+		local want got
+		want="$(printf '%s\n' \
+			'serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1 --rtscts=off' \
+			'terminal_input console serial; terminal_output console serial' \
+			'' \
+			'set default="0"' \
+			'set timeout="0"' \
+			'search -l kernel -s root' \
+			'' \
+			'menuentry "yunshu" {' \
+			$'\tlinux /boot/vmlinuz root=__ROOT__ rootwait noinitrd mitigations=off' \
+			'}' \
+			'menuentry "yunshu (failsafe)" {' \
+			$'\tlinux /boot/vmlinuz failsafe=true root=__ROOT__ rootwait noinitrd mitigations=off' \
+			'}')"
+		got="$(sed \
+			-e 's#@SERIAL_CONFIG@#serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1 --rtscts=off#g' \
+			-e 's#@TERMINAL_CONFIG@#terminal_input console serial; terminal_output console serial#g' \
+			-e 's#@GPT_ROOTPART@#root=__ROOT__ rootwait#g' \
+			-e 's#@CMDLINE@#mitigations=off#g' \
+			-e 's#@TIMEOUT@#0#g' \
+			-e 's#@TITLE@#yunshu#g' \
+			"${img}/grub-efi.cfg")"
+		[ "${got}" = "${want}" ] || die "grub.cfg 渲染结果与设备原版不一致：
+${got}"
+	}
+	align_ib_grub "${ib_dir}"
+
 	feed="$(grep -v '^[[:space:]]*#' "${ROOT_DIR}/overlay/files/etc/apk/repositories.d/yun-feed.list" |
 		awk 'NF' | head -1)"
 	[ -n "${feed}" ] || die "yun-feed.list 里没有 feed 地址"
