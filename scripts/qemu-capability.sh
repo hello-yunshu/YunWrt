@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P4 阻塞验收：QEMU 启动镜像，进 guest 取证据，逐项判定 18 项发布门槛。
+# P4 阻塞验收：QEMU 启动镜像，进 guest 取证据，逐项判定 16 项发布门槛。
 # 任一项不满足即非 0 退出。--self-test 用合成证据证明判定确实会红（无需 QEMU）。
 #   bash scripts/qemu-capability.sh [<image>] [--inject <key>] [--self-test]
 set -uo pipefail
@@ -41,8 +41,6 @@ EXPECTED='
 ⑤|uci_defaults_left|eq|0
 ⑥|fw4_check|eq|OK
 ⑥|fw4_net_device|re|^[1-9][0-9]*$
-⑦|upnpd_enabled|eq|1
-⑦|upnpd_ext_private|eq|1
 ⑦|upnp_relay|eq|present
 ⑧|flowcone_pkg|re|^[1-9][0-9]*$
 ⑧|btf|re|^(yes|detached)$
@@ -99,7 +97,7 @@ self_test() {
 		$'lan_ip\t192.168.2.1' $'lan_addr\t192.168.2.1/24' $'wan_addr\t10.0.2.15/24' \
 		$'luci_ui\tok' $'port_range\t10240 65535' $'mosdns953\t1' \
 		$'uci_defaults_left\t0' $'fw4_check\tOK' $'fw4_net_device\t1' \
-		$'upnpd_enabled\t1' $'upnpd_ext_private\t1' $'upnp_relay\tpresent' \
+		$'upnp_relay\tpresent' \
 		$'flowcone_pkg\t1' $'btf\tdetached' $'flowcone_proc\tyes' $'offload_rule\t2' \
 		$'dmesg_bad\t0' $'sfe_opt\tgone' >"${tmp}/good"
 
@@ -360,8 +358,6 @@ echo "R:mosdns953:$( n=$(netstat -lnup 2>/dev/null | awk '$4 ~ /:953$/ {c++} END
 echo "R:uci_defaults_left:$( m=0; for f in /etc/init.d/swrt-vm-performance /etc/config/swrt-vm-performance /usr/bin/swrt-vm-perf /usr/libexec/yunwrt-mosdns-hotplug /usr/share/yunwrt/99-mosdns /etc/mosdns/yunwrt.yaml /etc/sysctl.d/90-yunwrt-x86-network.conf /etc/hotplug.d/iface/99-mosdns; do [ -e "$f" ] || m=1; done; n=$(ls /etc/uci-defaults 2>/dev/null | grep -cE '^(90-yunwrt-network-hooks|97-yunwrt-mosdns|98-swrt-vm-performance|99-x86-vm-network|99-yunwrt-upnpd)$'); if [ "$m" -eq 0 ]; then echo "$n"; else echo "overlay-missing"; fi )"
 echo "R:fw4_check:$(fw4 check >/dev/null 2>&1 && echo OK || echo FAIL)"
 echo "R:fw4_net_device:$(grep -c 'net.physdev || net.device' /usr/share/ucode/fw4.uc 2>/dev/null)"
-echo "R:upnpd_enabled:$(uci -q get upnpd.@upnpd[0].enabled)"
-echo "R:upnpd_ext_private:$(uci -q get upnpd.@upnpd[0].ext_allow_private_ipv4)"
 echo "R:upnp_relay:$( if [ -x /etc/init.d/upnp_nat_relay ]; then pgrep -f 'upnp[-_]nat[-_]relay' >/dev/null 2>&1 && echo present || echo installed-not-running; else echo missing; fi )"
 echo "R:flowcone_pkg:$(apk list -I 2>/dev/null | grep -c '^flowcone')"
 echo "R:btf:$( if [ -e /sys/kernel/btf/vmlinux ]; then echo yes; elif [ -s /usr/lib/debug/boot/vmlinux ]; then echo detached; else echo no; fi )"

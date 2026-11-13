@@ -8,6 +8,8 @@ luci-compat
 luci-app-nginx-manager
 luci-app-cloudflare-ip
 luci-app-upnp-nat-relay
+# UPnP：对齐现网，只装自有 feed 的 upnp-nat-relay（客户端中继 + nft DNAT），
+# 不再装 miniupnpd 服务端；上游 luci-app-upnp 与 miniupnpd 见文件末尾负条目
 luci-theme-aurora
 luci-app-aurora-config
 luci-theme-bootstrap
@@ -99,3 +101,38 @@ openssh-sftp-server
 
 # --- 上游默认带、首版不要（§11 #3：usbmuxd 从未运行）---
 -usbmuxd
+# UPnP：只保留自有 feed 的 upnp-nat-relay，去掉上游通用 UPnP 及其 i18n 和后端
+-luci-app-upnp
+-luci-i18n-upnp-zh-cn
+-miniupnpd-nftables
+
+# --- 对齐现网 LuCI 集合（2026-11-13 审计）：现网 21 个之外的一律不进镜像 ---
+# 保留 flowcone（SFE 替代定案，qemu ⑧ 与能力清单 27 行绑定）
+-luci-app-3cat
+-luci-i18n-3cat-zh-cn
+-luci-app-airconnect
+-luci-i18n-airconnect-zh-cn
+-luci-app-ap-modem
+-luci-i18n-ap-modem-zh-cn
+-luci-app-dae
+-luci-i18n-dae-zh-cn
+-luci-app-filemanager
+-luci-i18n-filemanager-zh-cn
+-luci-app-homeproxy
+-luci-i18n-homeproxy-zh-cn
+-luci-app-honk
+-luci-i18n-honk-zh-cn
+-luci-app-natmapt
+-luci-i18n-natmapt-zh-cn
+-luci-app-nikki
+-luci-i18n-nikki-zh-cn
+-luci-app-partexp
+-luci-i18n-partexp-zh-cn
+-luci-app-sqm
+-luci-i18n-sqm-zh-cn
+-luci-app-vantage
+-luci-i18n-vantage-zh-cn
+-luci-app-zerotier
+-luci-i18n-zerotier-zh-cn
+-luci-theme-vantage
+-luci-i18n-vantage-theme-zh-cn

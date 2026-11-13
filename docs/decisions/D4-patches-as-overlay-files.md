@@ -17,3 +17,7 @@
 - 补丁只在组装阶段作用于 `build/`，`upstream/yaof/` 始终保持逐字节一致。
 - base 哈希对不上就硬失败（[D9](D9-base-drift-hard-fail.md)），不静默跳过。
 - 不整体移植旧仓的 78 个补丁，只保留这两个。
+
+## 变更记录
+
+- 2026-11-13：UPnP 对齐现网，首版不再安装 `miniupnpd-nftables`，只保留自有 `upnp-nat-relay`。`miniupnpd-force-forwarding` 补丁随之作废，本决策当前只适用于 `fw4.uc` 一个补丁。

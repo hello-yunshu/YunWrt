@@ -1,6 +1,7 @@
 #!/bin/sh
 # 首次启动把 UPnP 与 NAT 中继修到"可判定可用"的状态。
-# 设备历史问题是：upnp_nat_relay 处于 enabled 但未运行，miniupnpd 根本没装。
+# 对齐现网：镜像不再安装 miniupnpd 服务端，只保留自有的 upnp_nat_relay。
+# 因此 miniupnpd 缺失是预期状态，不再因此判首启失败；装了才顺手配置。
 # 这里只做启用与启动，不改具体转发规则；规则由 patch 层与自研包负责。
 
 die() {
@@ -8,25 +9,24 @@ die() {
 	exit 1
 }
 
-# 静默 exit 0 会让"miniupnpd 没装 / overlay 没生效"看起来像成功：
+# 静默 exit 0 会让"overlay 没生效"看起来像成功：
 # uci-defaults 成功后会被删掉，下一轮没人再试，症状是 UPnP 悄悄不可用。
-[ -f /etc/config/upnpd ] || die "/etc/config/upnpd 缺失（miniupnpd 未安装或 overlay 未进镜像）"
-
-uci -q batch <<EOF
+# 注意：miniupnpd 未安装时 /etc/config/upnpd 本来就不存在，那是预期，不是失败。
+if [ -f /etc/config/upnpd ] && [ -x /etc/init.d/miniupnpd ]; then
+	uci -q batch <<EOF
 set upnpd.@upnpd[0].enabled='1'
 set upnpd.@upnpd[0].ext_allow_private_ipv4='1'
 EOF
-uci -q commit upnpd
+	uci -q commit upnpd
 
-# 回读确认：commit 失败时脚本会被删掉且没人知道，症状是「跑了但没生效」。
-[ "$(uci -q get upnpd.@upnpd[0].enabled)" = "1" ] || die "upnpd.enabled 回读非 1"
-[ "$(uci -q get upnpd.@upnpd[0].ext_allow_private_ipv4)" = "1" ] || die "upnpd.ext_allow_private_ipv4 回读非 1"
+	# 回读确认：commit 失败时脚本会被删掉且没人知道，症状是「跑了但没生效」。
+	[ "$(uci -q get upnpd.@upnpd[0].enabled)" = "1" ] || die "upnpd.enabled 回读非 1"
+	[ "$(uci -q get upnpd.@upnpd[0].ext_allow_private_ipv4)" = "1" ] || die "upnpd.ext_allow_private_ipv4 回读非 1"
 
-if [ -x /etc/init.d/miniupnpd ]; then
 	/etc/init.d/miniupnpd enable
 	/etc/init.d/miniupnpd restart || echo "WARNING: miniupnpd restart 返回非 0（可能 WAN 未就绪，由 procd 重试）" >&2
 else
-	echo "WARNING: /etc/init.d/miniupnpd 不存在，UPnP 端口映射不可用" >&2
+	echo "INFO: miniupnpd 未安装，跳过 UPnP 服务端配置（只保留 upnp_nat_relay）" >&2
 fi
 
 if [ -x /etc/init.d/upnp_nat_relay ]; then
