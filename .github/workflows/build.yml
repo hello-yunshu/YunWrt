@@ -65,7 +65,7 @@ jobs:
       # 规则对齐 SWrt：tag 为 <平台>-<上游版本>，Release 名带产品名，不是 prerelease。
       # 每次构建都发布，同一上游版本直接覆盖资产（先删旧资产再传，避免按日期累积）。
       - name: 创建或更新 Release
-        uses: ncipollo/release-action@v1.14.0
+        uses: ncipollo/release-action@v1.21.0
         with:
           name: YunWrt-${{ env.OPENWRT_VERSION }}
           tag: X86-${{ env.OPENWRT_VERSION }}
