@@ -43,7 +43,7 @@ gunzip -c YunWrt-x86-64-<...>-ext4-combined-efi.img.gz |
 
 ## 发版
 
-手动触发 `.github/workflows/build.yml` 并选 `release` 模式，会建 tag `X86-<上游版本>` 的 Release；`nightly` 模式只上传 Actions artifact。
+每次构建（定时、push、手动）都会发布，规则对齐 SWrt：tag 为 `X86-<上游版本>`，同一上游版本**直接覆盖**该 Release 的资产（先删旧资产再上传，不按日期累积）；只有上游版本变化才产生新 Release。同时保留 Actions artifact 供临时取用。
 
 ## 目录
 
