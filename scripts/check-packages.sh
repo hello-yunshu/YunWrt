@@ -7,8 +7,12 @@ ERR=0
 
 die() { printf 'FAIL %s\n' "$*" >&2; ERR=$((ERR + 1)); }
 
-# 首版范围冻结线（迁移方案 §7.5 / 保全审计 §10.4）：这些包不进首版
-FORBIDDEN='3proxy|performance-manager|rill-runtime-preview|dnsmasq_full_ipset|luci-app-wireguard|kmod-ipt-nat6'
+# 首版范围冻结线（迁移方案 §7.5 / 保全审计 §10.4）：这些包不进首版。
+# 例外见 D12：性能管理器经 luci-app-performance-manager-all 纳入；这里继续封禁
+# 旧拆分包名（performance-manager / luci-app-performance-manager /
+# performance-manager-rill / luci-i18n-performance-manager-zh-cn），它们与 all
+# 单包 CONFLICTS，进镜像会破坏安装。all 包名不在本正则内，不会被误拦。
+FORBIDDEN='3proxy|performance-manager|luci-app-performance-manager|performance-manager-rill|luci-i18n-performance-manager-zh-cn|rill-runtime-preview|dnsmasq_full_ipset|luci-app-wireguard|kmod-ipt-nat6'
 
 mapfile_or_read() { cat "$@"; }
 
