@@ -1,5 +1,13 @@
 #!/bin/sh
 # Coalesce WAN/WAN6 ifup events without blocking netifd's hotplug queue.
+# 惰性自愈：只有在 127.0.0.1:953 确实不再服务时才重启 mosdns。
+#
+# 为什么不再盲重启：/etc/mosdns/yunwrt.yaml 只监听 127.0.0.1:953 并转发到公共
+# DoT（tls://1.1.1.1 / 8.8.8.8），不绑接口、不用 WAN 地址、也没开 cache。
+# WAN 掉线时上游连接失败，恢复后新查询自然建新连接 —— 不需要重启。反过来，
+# 在 WAN 刚恢复的那一刻主动重启 DNS，一旦 mosdns 起不来，本来能用的解析反被
+# 这个"优化"弄挂。所以现在只做兜底：探到 953 不在监听才救一次。
+#
 # State is volatile; flock releases locks even when a worker is killed.
 umask 077
 state=/var/run/yunwrt-mosdns-hotplug
@@ -9,6 +17,13 @@ enabled() {
 }
 uptime_seconds() {
     cut -d . -f 1 /proc/uptime
+}
+# 953 = 0x03B9。/proc/net/{udp,tcp} 的 local_address 形如 0100007F:03B9，
+# 直接读 /proc 判定，不依赖 ss/netstat 是否进了镜像，也不受 busybox 变体影响。
+dns_alive() {
+    grep -qi ':03B9 ' /proc/net/udp 2>/dev/null && return 0
+    grep -qi ':03B9 ' /proc/net/tcp 2>/dev/null && return 0
+    return 1
 }
 command -v flock >/dev/null 2>&1 || {
     logger -t swrt-mosdns 'Missing flock; automatic hotplug restart skipped'
@@ -53,9 +68,14 @@ case "${1:-}" in
             . /lib/functions/network.sh
             network_flush_cache
             network_is_up wan || network_is_up wan6 || continue
+            # 惰性自愈：953 还在服务就什么都不做（WAN 恢复不需要重启 mosdns）
+            if dns_alive; then
+                logger -t swrt-mosdns "WAN settled (last=$iface); :953 still serving, no restart"
+                continue
+            fi
             # Do not leak lock descriptors into init/procd child processes.
             if /etc/init.d/mosdns restart </dev/null 8>&- 9>&-; then
-                logger -t swrt-mosdns "Restarted after settled WAN events (last=$iface)"
+                logger -t swrt-mosdns "Restarted after settled WAN events (last=$iface, :953 was not listening)"
             else
                 logger -t swrt-mosdns "Restart failed after WAN event (last=$iface)"
             fi

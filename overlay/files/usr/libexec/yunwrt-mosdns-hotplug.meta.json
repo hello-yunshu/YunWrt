@@ -2,6 +2,6 @@
   "kind": "add",
   "upstream_path": "usr/libexec/yunwrt-mosdns-hotplug",
   "asserts": [],
-  "reason": "mosdns 重启合并器，flock 串行化",
+  "reason": "mosdns 重启合并器：合并 WAN/WAN6 ifup 事件（flock 串行化，10s 静默窗口），且只在 127.0.0.1:953 不在监听时才重启（惰性自愈，不盲重启）",
   "owner": "yunwrt"
 }
