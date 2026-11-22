@@ -16,6 +16,18 @@ ERR=0
 die() { printf '  FAIL %s\n' "$*" >&2; ERR=$((ERR + 1)); }
 ok() { printf '  ok  %s\n' "$*"; }
 
+if bash "${ROOT_DIR}/scripts/test-dns-guard.sh"; then
+	ok "dns-guard lease, incident, restore, and reboot unit checks"
+else
+	die "dns-guard unit checks failed"
+fi
+
+if bash "${ROOT_DIR}/scripts/test-dns-guard-runtime-fault.sh"; then
+	ok "dns-guard runtime state machine under simulated resolver failure"
+else
+	die "dns-guard runtime fault injection failed"
+fi
+
 rootfs="$(find "${ROOT_DIR}/build" -type d -path '*/build_dir/*/root-x86' 2>/dev/null | head -1)"
 if [ -z "${rootfs}" ]; then
 	die "找不到 ImageBuilder rootfs（*/build_dir/*/root-x86），无法确认 overlay 是否进镜像"

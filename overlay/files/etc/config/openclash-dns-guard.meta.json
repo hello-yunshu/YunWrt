@@ -2,6 +2,6 @@
   "kind": "add",
   "upstream_path": "etc/config/openclash-dns-guard",
   "asserts": [],
-  "reason": "OpenClash DNS 守护默认配置；bark_key 留空，避免密钥进入仓库",
+  "reason": "OpenClash DNS 守护默认配置；bark_key 留空，包含通知阈值与有界降级时限",
   "owner": "yunwrt"
 }

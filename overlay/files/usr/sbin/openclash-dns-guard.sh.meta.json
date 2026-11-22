@@ -2,6 +2,6 @@
   "kind": "add",
   "upstream_path": "usr/sbin/openclash-dns-guard.sh",
   "asserts": [],
-  "reason": "OpenClash DNS 降级守护：653 连续不可用时切 mosdns 953，恢复后按原值回填并校验",
+  "reason": "OpenClash DNS 守护：事务绑定的有界维护租约、告警去重与硬时限降级；跨重启保存原始 dnsmasq 配置并回读验证",
   "owner": "yunwrt"
 }
