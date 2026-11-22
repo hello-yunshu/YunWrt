@@ -1,0 +1,7 @@
+{
+  "kind": "add",
+  "upstream_path": "etc/uci-defaults/97-yunwrt-nginx-http",
+  "asserts": [],
+  "reason": "D13：删掉 nginx-util 的 _redirect2ssl（302 强跳 https），把 80 挂到 _lan，明文 LuCI 只在 LAN 可达；nginx -t 不过即回滚",
+  "owner": "yunwrt"
+}

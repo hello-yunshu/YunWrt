@@ -1,0 +1,76 @@
+#!/bin/sh
+# D13：LuCI 管理面取消 http→https 强制跳转，80 直接服务 LuCI。
+#
+# 现状（上游 nginx-util 的默认 /etc/config/nginx）：80 端口上只有一个
+# _redirect2ssl server，把所有明文请求 302 到 https；而 443 用的是自签证书
+# （nginx._lan.uci_manage_ssl='self-signed'），浏览器必然弹警告。没有受信任
+# 证书时，"强制 https" 换不来任何机密性，只是每次访问多点一次"继续前往"。
+#
+# 做法：
+#   1. 删掉 _redirect2ssl 段（那个 302）
+#   2. 把 80 / [::]:80 挂到 _lan 段上 —— _lan 已 include restrict_locally，
+#      只放行回环与私有网段（末尾 deny all），所以明文入口仍然只在 LAN
+#   3. 443 原样保留，既有 https 书签与 nginx-manager 的 SSL 站点都不受影响
+#
+# 两处非 0 退出是刻意的（沿用本目录既有约定）：uci-defaults 成功即被删除，
+# 静默 exit 0 会让「overlay 没生效」看起来像成功。
+
+die() {
+	echo "ERROR: $*" >&2
+	logger -t nginx-http -p daemon.err "ERROR: $*"
+	exit 1
+}
+
+[ -x /usr/sbin/nginx ] || die "nginx 未安装"
+[ -x /usr/bin/nginx-util ] || die "nginx-util 未安装（nginx-ssl-util 缺失）"
+
+eval "$(/usr/bin/nginx-util get_env 2>/dev/null)" || die "nginx-util get_env 失败"
+[ -n "${LAN_NAME:-}" ] || die "get_env 未给出 LAN_NAME"
+[ -n "${UCI_CONF:-}" ] || die "get_env 未给出 UCI_CONF"
+
+SEC="nginx.${LAN_NAME}"
+uci -q get "${SEC}" >/dev/null 2>&1 || die "uci 缺少 server 段 ${SEC}"
+
+BAK="$(mktemp /tmp/nginx.config.XXXXXX)" || die "无法创建备份"
+cp /etc/config/nginx "${BAK}" || die "备份 /etc/config/nginx 失败"
+
+# 1. 去掉 302 强跳段（段名来自 nginx-util 的 nginx.config，固定不变量）
+uci -q delete nginx._redirect2ssl
+
+# 2. 80 挂到 _lan（幂等：先删后加，避免每次开机重复堆 listen）
+uci -q del_list "${SEC}.listen=80"
+uci -q del_list "${SEC}.listen=[::]:80"
+uci add_list "${SEC}.listen=80"
+uci add_list "${SEC}.listen=[::]:80"
+
+uci commit nginx || {
+	cp "${BAK}" /etc/config/nginx
+	rm -f "${BAK}"
+	die "uci commit nginx 失败，已还原"
+}
+
+regen_and_test() {
+	rm -f "$(readlink "${UCI_CONF}" 2>/dev/null)" 2>/dev/null
+	/usr/bin/nginx-util init_lan >/dev/null 2>&1 || return 1
+	[ -e "${UCI_CONF}" ] || return 1
+	/usr/sbin/nginx -t -c "${UCI_CONF}" -g 'daemon off;' >/dev/null 2>&1
+}
+
+if ! regen_and_test; then
+	cp "${BAK}" /etc/config/nginx
+	uci commit nginx
+	regen_and_test >/dev/null 2>&1
+	rm -f "${BAK}"
+	die "80 加入 _lan 后未通过 nginx -t，已回滚（强制 https 保持原样）"
+fi
+rm -f "${BAK}"
+
+# 已在运行就平滑重载；未运行则不用管，开机 start 时读到的就是新配置
+if [ -f /var/run/nginx.pid ]; then
+	/etc/init.d/nginx reload >/dev/null 2>&1 ||
+		/etc/init.d/nginx restart >/dev/null 2>&1 ||
+		die "nginx 重载失败"
+fi
+
+logger -t nginx-http "已取消 http→https 强跳：${LAN_NAME} 同时监听 80 与 443，明文入口仅限 LAN"
+exit 0
