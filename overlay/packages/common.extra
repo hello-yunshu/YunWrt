@@ -5,6 +5,20 @@
 # hello-yunshu/luci-app-performance-manager，自有 feed 已发布 luci-app-performance-manager-all）。
 
 # --- Web 管理栈（D5：nginx + uwsgi，不用 uhttpd）---
+# D14：nginx 变体由 nginx-ssl 改为上游 nginx-full。
+# 目的不是给 LuCI 开 HTTP/3，而是让 luci-app-nginx-manager 的 HTTP/3 开关能真正
+# 生效——它的生成器 nginx-manager-gen 用 `nginx -V | grep http_v3_module` 探针，
+# 探针为假时静默跳过，而官方预编译的 nginx-ssl 不带 --with-http_v3_module
+# （Config_ssl.in 的 NGINX_HTTP_QUIC 默认 n），只有 full 变体强制全选才带。
+# 兼容性：nginx-full 的 Provides 含 nginx 与 nginx-ssl，luci-nginx(+nginx)、
+# nginx-mod-luci(Depends nginx-ssl)、luci-app-nginx-manager(+nginx) 三处依赖都被满足；
+# Depends 清单与 nginx-ssl 完全一致，Installed-Size 只多 130 KB。
+# 负条目：ImageBuilder 会把 -x 整条剔除，实测只请求 nginx-full 时 apk 不会再拉
+# nginx-ssl（nginx-mod-luci 的 Depends: nginx-ssl 由 full 的 Provides 满足，事务
+# 包数与基线一样是 72）。所以它不是解析必需，而是声明意图 + 挡住将来有人把
+# nginx-ssl 显式写进清单（两个互斥变体同时进事务会撞 CONFLICTS）。
+nginx-full
+-nginx-ssl
 luci-nginx
 luci-compat
 luci-app-nginx-manager

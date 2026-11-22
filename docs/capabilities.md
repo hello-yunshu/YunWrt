@@ -20,7 +20,7 @@
 
 | 能力域 | 我在用的能力 | 首版 | 实现方式 | 可执行验收 | 结果 |
 |---|---|---|---|---|---|
-| Web 管理界面（含反代与大文件上传） | LuCI 跑在 nginx + uwsgi 上，80/443/5686/9083 | 要有 | 官方 feed `luci-nginx`/`nginx-full`/`uwsgi`/`uwsgi-cgi-plugin` + overlay 配置 | `/cgi-bin/luci` 返回 200；`pgrep uhttpd` 为空；80 端口仅 nginx | —（P4 验收后填） |
+| Web 管理界面（含反代与大文件上传） | LuCI 跑在 nginx + uwsgi 上，80/443/5686/9083；管理面不再强跳 https | 要有 | 官方 feed `luci-nginx`/`nginx-full`/`uwsgi`/`uwsgi-cgi-plugin` + overlay 配置（变体见 D14，取消强跳见 D13） | `curl -sI http://192.168.2.1/` 返回 200 且无 `location: https`；`/cgi-bin/luci` 返回 200；`pgrep uhttpd` 为空；80 端口仅 nginx；`nginx -V` 含 `--with-http_v3_module`（h3 能力在位，默认不开） | —（P4 验收后填） |
 | 自研 LuCI（nginx-manager / upnp-nat-relay / cloudflare-ip） | 三个 app 都在用；nginx-manager 管站点与反代，cloudflare-ip 把 CF 段写进 nft/dnsmasq | 要有（三个都必须先进自有 feed） | 自研 feed `yun-openwrt-packages` | 菜单可见；`apk info -e` 三个包均成功；`nft list set` 有 CF 段 | —（P3 验收后填） |
 | 性能管理器（PM，D12） | 现网后装在用：性能调优、基准测试、Rill 智能建议、历史回滚 | 要有 | 自有 feed `luci-app-performance-manager-all`（旧拆分包名冻结，见 D12） | `apk info -e luci-app-performance-manager-all rill-runtime`；`/etc/init.d/performance-manager status` running；LuCI 菜单可见 | —（随 P4 验收后填） |
 | 分流去重与域名防护 | mosdns + `v2ray-geoip/geosite`，`127.0.0.1:953`，hotplug 用 `flock`；`banip` 仅出现在 seed 里，设备未装 | 要有（mosdns + flock）；`banip` **不要** | OpenWrt-Add `apps/luci-app-mosdns`（含 `mosdns`）+ overlay 配置 | mosdns 进程 running；`ss -lnup \| grep :953` 有输出；`command -v flock` | —（P4 验收后填） |

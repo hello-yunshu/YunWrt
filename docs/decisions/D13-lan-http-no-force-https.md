@@ -38,16 +38,10 @@ config server '_redirect2ssl'
 - `luci-app-nginx-manager` 不受影响：它的站点配置在自己的 `/etc/nginx/conf.d/luci-manager/sites/` 下，每个 SSL 站点是否带 301 由它自己的 `redirect_http_port` 决定（该字段可选，默认不填），与本决策无关。
 - 想恢复强制 https：`uci add nginx server` 重建 `_redirect2ssl` 段，或直接 `uci set nginx._redirect2ssl=server` 后补 `listen`/`return` 两项。
 
-## 未采纳的关联方案：换 `nginx-full` 以启用 nginx-manager 的 HTTP/3
+## 关联但独立的另一件事
 
-`luci-app-nginx-manager` 的 Core Config 里有 `http3`（HTTP/3 over QUIC）开关，但生成器 `nginx-manager-gen` 用 `_nginx_has_v3()` 探针（`nginx -V | grep http_v3_module`）判断，探针为假时**静默跳过** —— 也就是说在官方 `nginx-ssl` 上这个开关是空转的。
+LuCI 管理面的协议（本文）与 nginx 用哪个变体是两件互不影响的事，后者见 [D14](D14-nginx-full-variant.md)：已换用上游 `nginx-full`，目的是让 `luci-app-nginx-manager` 的 HTTP/3 开关真正生效（它的 `_nginx_has_v3()` 探针在 `nginx-ssl` 上为假，开关点了没反应）。
 
-要让开关真生效，唯一途径是换官方 `nginx-full`：它是 `VARIANT:=full`「ALL config selected」，官方预编译二进制内嵌 `--with-http_v3_module` + `--with-compat`；同版本 `nginx-ssl` 没有 `--with-http_v3_module`（`Config_ssl.in` 的 `NGINX_HTTP_QUIC` 默认 `n`）。代价其实很小：`Installed-Size` 1,013,760 B vs 880,640 B（+130 KB），`Depends` 清单完全一致，`Provides` 含 `nginx` 与 `nginx-ssl`，`luci-nginx`、`nginx-mod-luci`、`luci-app-nginx-manager`（v1.8.8 起依赖虚拟包 `nginx`，见其 issue #4 / `4d20ddd`）三处依赖都能满足。
-
-**仍然不做**，理由是 nginx-manager 自己的 UI 文案就写着：
-
-> **Warning:** Nginx HTTP/3 module has a known bug where POST requests may trigger a massive memory allocation (8GB), causing 500 errors. If you encounter this issue, disable HTTP/3 until nginx fixes the bug.
-
-给一个自带 8GB 内存分配风险、且只影响 LAN 内反代站点的能力换掉整个 nginx 变体，不划算。等上游修了这个 bug、同时把 `NGINX_HTTP_QUIC` 默认翻成 `y`，`nginx-ssl` 会自动带上 v3，届时零改动即可评估。
+**LuCI 自身不开 h3**：管理面是 LAN 内低延迟场景，h2 够用；且 h3 模块在 nginx-manager 的 UI 里就带着一条警告——POST 可能触发 8GB 内存分配导致 500。所以 `97-yunwrt-nginx-http` 只处理「80 不跳 https」，不碰 quic 监听。
 
 （顺带留档：GitHub 上没有可用的 nginx-quic feed —— 只有 `hnyyghk/OpenWrt_Nginx-QUIC` ★2 停更于 2024-10、`sbwml/feeds_packages_net_nginx` ★1 这类单人 fork；自建分叉的成本见 `yun-openwrt-packages` 的 `docs/BUILD.md §10`。）
