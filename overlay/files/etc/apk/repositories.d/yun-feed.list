@@ -1,1 +1,2 @@
-https://hello-yunshu.github.io/yun-openwrt-packages/x86_64/packages.adb
+# 自有 feed 按 OpenWrt 版本分目录（25.12.6 = 当前 release）；上游 release 变更时需同步此地址
+https://hello-yunshu.github.io/yun-openwrt-packages/25.12.6/x86_64/packages.adb

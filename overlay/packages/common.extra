@@ -12,9 +12,13 @@ luci-app-upnp-nat-relay
 # 不再装 miniupnpd 服务端；上游 luci-app-upnp 与 miniupnpd 见文件末尾负条目
 luci-theme-aurora
 luci-app-aurora-config
+luci-i18n-aurora-config-zh-cn
 luci-theme-bootstrap
 luci-app-ramfree
+luci-i18n-ramfree-zh-cn
 luci-app-samba4
+luci-i18n-samba4-zh-cn
+wsdd2
 
 # --- 透明代理（D6：自有 feed 编译，P3b）---
 luci-app-openclash
@@ -67,6 +71,7 @@ libopenssl-legacy
 libcurl
 
 # --- 运维工具 ---
+fail2ban
 bash
 bc
 coreutils

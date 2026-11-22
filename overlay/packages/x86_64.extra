@@ -28,6 +28,7 @@ kmod-crypto-rng
 
 # --- 转发与拥塞控制 ---
 kmod-nft-socket
+kmod-nft-tproxy
 kmod-tcp-bbr
 
 # --- 压缩与内存 ---
