@@ -1,58 +1,52 @@
 #!/bin/sh
-# 首次启动把 mosdns 拉起到可判定可用的状态：监听 127.0.0.1:953。
+# 首次启动把 mosdns 拉到可用状态，并确保走上游配置生成器。
 #
-# 背景：luci-app-mosdns 1.7.15 的 generate_config 会写出 log.size、stats_api、
-# adblock_set 三项，只有打了 sbwml 那套补丁的 mosdns 才认。本镜像从预编译源拿到
-# 的 mosdns 5.3.4-r15 是上游原版（无补丁），加载 /var/etc/mosdns.json 直接
-# FATAL: 'log' has invalid keys: size —— 即使把 size 去掉，还会继续卡在
-# plugin type stats_api not defined。所以生成器在这套二进制上永远跑不出可用配置。
+# luci-app-mosdns 的图形界面只对 /var/etc/mosdns.json 生效：basic.js 里几乎所有
+# 开关都 depends('configfile','/var/etc/mosdns.json')。选另一个取值时界面会只剩
+# 一个 YAML 编辑器，所有开关全部隐藏——这正是之前"在 LuCI 里配了却不生效"的由来。
 #
-# 因此这里把 configfile 指到随镜像发布的 /etc/mosdns/config_custom.yaml。
-# 必须用这个文件名，不能用别的路径：LuCI 的 mosdns 页面把 configfile 做成了只有
-# 两个选项的下拉框（/var/etc/mosdns.json 与 /etc/mosdns/config_custom.yaml）。
-# 指向第三个路径时，用户只要在 LuCI 点一次保存，值就会被重置回默认，
-# mosdns 随即崩掉，而且没有任何报错——这个坑已经在现网踩过一次。
+# 那份 JSON 含 log.size 与 stats_api，只有配套补丁版 mosdns 才认。本镜像从自有
+# feed 装的就是配套版，由 scripts/check-mosdns-config.sh 在构建期守住；装错版本
+# 会在这里 restart 失败并 exit 1，而不是悄悄跑在残废配置上。
+set -e
 
-# 这里一律 exit 1 而不是 exit 0：uci-defaults 成功即被删除，
-# 静默放过等于"mosdns 悄悄没起来"，只有丢出非 0 才会保留脚本、下轮重试。
-[ -f /etc/config/mosdns ] || {
-	echo "ERROR: /etc/config/mosdns missing（luci-app-mosdns 未安装）" >&2
-	exit 1
-}
-[ -f /etc/mosdns/config_custom.yaml ] || {
-	echo "ERROR: /etc/mosdns/config_custom.yaml missing" >&2
-	exit 1
-}
-[ -x /etc/init.d/mosdns ] || {
-	echo "ERROR: /etc/init.d/mosdns missing（mosdns 未安装）" >&2
-	exit 1
-}
+[ -f /etc/config/mosdns ] || { echo "ERROR: /etc/config/mosdns missing（luci-app-mosdns 未安装）" >&2; exit 1; }
+[ -x /etc/init.d/mosdns ] || { echo "ERROR: /etc/init.d/mosdns missing（mosdns 未安装）" >&2; exit 1; }
 
-uci -q batch <<EOF
+uci -q batch <<'EOF'
 set mosdns.config.enabled='1'
-set mosdns.config.configfile='/etc/mosdns/config_custom.yaml'
-# adblock=0：广告拦截只有生成器会用到（adblock_set 插件），本二进制没有该插件，
-# 开着只会让 init 脚本后台去下载一堆清单写进 /etc/mosdns/rule，纯浪费闪存写。
-# 域名拦截实际由 OpenClash 侧的规则集负责。
+set mosdns.config.configfile='/var/etc/mosdns.json'
+# 953 是 openclash-dns-guard 的兜底端口，也是 OpenClash 指向 mosdns 的地址；
+# 上游默认是 0.0.0.0:5335，改掉它会让整条 DNS 链断掉。
+# 只监听回环：DNS 劫持由 dnsmasq + OpenClash 负责，mosdns 只做兜底上游。
+set mosdns.config.listen_address='127.0.0.1'
+set mosdns.config.listen_port='953'
+set mosdns.config.redirect='0'
+# 上游默认 remote_dns 是 tls://8.8.8.8。这条线路上 853 会被中断（SYN 无响应或
+# 握手后单向 EOF），留着只会让"国外域名"那条分支卡到超时。换成国内可用 DoH。
+set mosdns.config.remote_dns='https://dns.alidns.com/dns-query'
+# 广告拦截走 adblock_set 插件，规则清单要联网下载写进 /etc/mosdns/rule。
+# 默认关闭，需要时在 LuCI 里打开即可——这才是"开关真的生效"。
 set mosdns.config.adblock='0'
-# 同理，geo 自动更新下回来的是本配置根本读不到的 geosite.txt。
 set mosdns.config.geo_auto_update='0'
 EOF
 uci -q commit mosdns
 
 # 回读确认：commit 失败不会体现在 restart 的返回码里。
-[ "$(uci -q get mosdns.config.enabled)" = "1" ] || {
-	echo "ERROR: mosdns.config.enabled 回读非 1" >&2
+[ "$(uci -q get mosdns.config.configfile)" = "/var/etc/mosdns.json" ] || {
+	echo "ERROR: configfile 回读非 /var/etc/mosdns.json" >&2
 	exit 1
 }
-[ "$(uci -q get mosdns.config.configfile)" = "/etc/mosdns/config_custom.yaml" ] || {
-	echo "ERROR: mosdns.config.configfile 回读不符" >&2
+[ "$(uci -q get mosdns.config.listen_port)" = "953" ] || {
+	echo "ERROR: listen_port 回读非 953" >&2
 	exit 1
 }
 
 /etc/init.d/mosdns enable
+# 这一步会调用生成器写出 /var/etc/mosdns.json 再启动。二进制不配套就会在这里
+# 失败，脚本保留下来下轮重试，不会静默放过。
 /etc/init.d/mosdns restart || {
-	echo "ERROR: mosdns failed to start" >&2
+	echo "ERROR: mosdns 启动失败（配置生成或二进制不配套）" >&2
 	exit 1
 }
 

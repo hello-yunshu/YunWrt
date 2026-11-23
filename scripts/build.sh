@@ -253,7 +253,13 @@ gzip -9 -n "${vhdx}"
 sha256 "${vhdx}.gz" > "${vhdx}.gz.sha256"
 echo "    $(basename "${vhdx}.gz")"
 
-FEED_SHA="$(curl -fsSL --retry 3 "https://qiusimons.github.io/OpenWrt-Add/x86_64/packages.adb" 2>/dev/null | sha256 | awk '{print $1}' || true)"
+# 记录本次构建所用 feed 索引的指纹，供日后复现与溯源。
+# 原来指向 qiusimons.github.io/OpenWrt-Add —— 那正是 mosdns 装错版本的来源：
+# 它的 mosdns-5.3.4-r15 是无补丁构建，与 luci-app-mosdns 不配套。mosdns 现在
+# 由自有 feed 提供配套版（见 docs/decisions/D15），因此改为记录自有 feed。
+FEED_URL="$(grep -v '^[[:space:]]*#' "${ROOT_DIR}/overlay/files/etc/apk/repositories.d/yun-feed.list" |
+	awk 'NF' | head -1)"
+FEED_SHA="$(curl -fsSL --retry 3 "${FEED_URL}" 2>/dev/null | sha256 | awk '{print $1}' || true)"
 ARTIFACT="$(basename "$(ls -1 "${ROOT_DIR}"/build/artifact/YunWrt-*.img.gz 2>/dev/null | head -1)")"
 
 jq -n \

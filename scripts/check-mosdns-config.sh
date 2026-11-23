@@ -1,93 +1,77 @@
 #!/usr/bin/env bash
-# mosdns 自带配置门禁：保证"出厂就有一个 mosdns 能真加载的配置"。
+# mosdns 门禁：镜像里的二进制必须是配套补丁版，配置必须走上游生成器。
 #
-# 这条门禁防的是一整类静默失效，不是某个已知 bug：
-#   luci-app-mosdns 的 init 脚本会为 /var/etc/mosdns.json 生成配置，里面用到
-#   log.size / stats_api / adblock_set —— 这三项只有打过 sbwml 补丁的 mosdns 才有。
-#   预编译源里的 mosdns 5.3.4-r15 是上游原版，加载即 FATAL；而 FATAL 只写进
-#   procd 日志，dnsmasq 上游由 OpenClash 占着，日常完全看不出异常，直到代理挂掉
-#   需要 953 兜底时才暴露。所以必须在这里把"配置文件与二进制不配套"变成构建期失败。
+# 背景：luci-app-mosdns 的界面只对 /var/etc/mosdns.json 生效——basic.js 里几乎
+# 每个开关都 depends('configfile','/var/etc/mosdns.json')。那份 JSON 含 log.size
+# 与 stats_api，只有打了 sbwml 那套补丁的 mosdns 才认。
 #
-# 检查分两层：
-#   静态层：overlay 里的配置文件与 uci-defaults 本身是否自洽（无需构建即可跑）
-#   镜像层：build/ 里的 rootfs 是否真的带上了这份配置（assemble + IB 之后才可跑）
+# 而 mosdns-5.3.4-r15 这个名字对应两种互不兼容的构建，包名、版本号乃至文件大小
+# 都很接近，靠元数据分不出来。装成无补丁版的表现是静默降级：生成器写出的配置
+# 加载即 FATAL，FATAL 只进 procd 日志；dnsmasq 上游由 OpenClash 占着，日常完全
+# 看不出异常，直到代理挂掉需要 953 兜底时才暴露。
+#
+# 所以这里把"二进制不配套"变成构建期失败。检查分两层：
+#   静态层：overlay 与 uci-defaults 是否自洽（无需构建即可跑）
+#   镜像层：rootfs 里的 mosdns 真的带补丁（assemble + ImageBuilder 之后才可跑）
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OVERLAY="${ROOT_DIR}/overlay/files"
-CONF_REL="etc/mosdns/config_custom.yaml"
-CONF="${OVERLAY}/${CONF_REL}"
 UCI_DEFAULTS="${OVERLAY}/etc/uci-defaults/97-yunwrt-mosdns"
-EXPECT_CONF="/etc/mosdns/config_custom.yaml"
+EXPECT_CONF="/var/etc/mosdns.json"
 ERR=0
 
 die() { printf '  FAIL %s\n' "$*" >&2; ERR=$((ERR + 1)); }
 ok() { printf '  ok  %s\n' "$*"; }
 note() { printf '  note %s\n' "$*"; }
 
-echo "==> 静态层：随镜像发布的 mosdns 配置"
+echo "==> 静态层：配置模式与 uci-defaults"
 
-if [ ! -f "${CONF}" ]; then
-	die "缺少 overlay/files/${CONF_REL}"
+# overlay 里不能再躺一份 mosdns 配置。带 config_custom.yaml 就意味着 configfile
+# 被钉在那个取值上，界面上的开关全部隐藏——正是这一版要根除的状态。
+if [ -e "${OVERLAY}/etc/mosdns" ]; then
+	die "overlay/files/etc/mosdns 仍存在：方案已改为上游生成器，这里的配置会覆盖包自带文件并让界面开关失效"
 else
-	ok "存在 overlay/files/${CONF_REL}"
-
-	# 生成器专用、原版二进制不认的键。任何一个出现，mosdns 起的瞬间就退出。
-	for bad in stats_api adblock_set query_log; do
-		if grep -qE "^[[:space:]]*type:[[:space:]]*${bad}[[:space:]]*$" "${CONF}"; then
-			die "配置用了 ${bad} 插件：未打补丁的 mosdns 5.3.4 没有它（plugin type ${bad} not defined）"
-		fi
-	done
-	if sed -n '/^log:/,/^[^[:space:]]/p' "${CONF}" | grep -qE "^[[:space:]]+(size|backups):"; then
-		die "log 段出现 size/backups：原版 mosdns 5.3.4 的 log schema 不认（'log' has invalid keys）"
-	fi
-	for bad in prefetch dump_file dump_interval; do
-		if grep -qE "^[[:space:]]*${bad}:" "${CONF}"; then
-			die "配置用了 ${bad}：属于生成器给补丁版准备的缓存参数"
-		fi
-	done
-	ok "没有生成器专用的插件与键"
-
-	# 953 是 openclash-dns-guard 的 fallback_port，也是 LuCI 里 listen_port 的默认值。
-	# 两边对不上，守护降级时会把 dnsmasq 指向一个没人监听的端口。
-	if ! grep -qE 'listen:[[:space:]]*"127\.0\.0\.1:953"' "${CONF}"; then
-		die "配置里没有 listen: \"127.0.0.1:953\"，与 dns-guard 的 fallback_port 对不上"
-	elif [ "$(grep -cE 'listen:[[:space:]]*"127\.0\.0\.1:953"' "${CONF}")" -lt 2 ]; then
-		die "只有一处 953 监听：UDP 与 TCP 入口都必须有，否则纯 TCP 客户端解析不到"
-	else
-		ok "UDP/TCP 均监听 127.0.0.1:953"
-	fi
-
-	# 境外 DoT 直连不通（1.1.1.1 的 TLS 会被重置），且返回海外 CDN 节点。
-	if grep -qE 'addr:[[:space:]]*"tls://(1\.1\.1\.1|8\.8\.8\.8)"' "${CONF}"; then
-		die "上游用了境外 DoT：WAN 直连下不可用，且地理视图是海外（EdgeOne 会给新加坡节点）"
-	fi
-	ok "上游不含境外 DoT"
+	ok "overlay 未覆盖 /etc/mosdns"
 fi
 
 if [ ! -f "${UCI_DEFAULTS}" ]; then
 	die "缺少 overlay/files/etc/uci-defaults/97-yunwrt-mosdns"
 else
-	if ! grep -qF "set mosdns.config.configfile='${EXPECT_CONF}'" "${UCI_DEFAULTS}"; then
+	if grep -qF "set mosdns.config.configfile='${EXPECT_CONF}'" "${UCI_DEFAULTS}"; then
+		ok "uci-defaults 把 configfile 设为 ${EXPECT_CONF}（走上游生成器）"
+	else
 		die "uci-defaults 未把 configfile 设为 ${EXPECT_CONF}"
-	elif ! grep -qF "= \"${EXPECT_CONF}\"" "${UCI_DEFAULTS}"; then
-		die "uci-defaults 没有回读校验 configfile（commit 失败不会体现在 restart 返回码里）"
-	else
-		ok "uci-defaults 指向 ${EXPECT_CONF} 并回读校验"
 	fi
-	if ! grep -qE '^set mosdns\.config\.adblock=.0.$' "${UCI_DEFAULTS}"; then
-		die "uci-defaults 未关闭 adblock：init 脚本会后台下载广告清单写进 /etc/mosdns/rule，而该插件在镜像里不存在"
+	if grep -qF "= \"${EXPECT_CONF}\"" "${UCI_DEFAULTS}"; then
+		ok "uci-defaults 回读校验 configfile"
 	else
-		ok "adblock 已关闭"
+		die "uci-defaults 没有回读校验 configfile（commit 失败不会体现在 restart 返回码里）"
+	fi
+
+	# 953 是 openclash-dns-guard 的 fallback_port，也是 OpenClash 指向 mosdns 的
+	# 地址。生成器默认是 5335，不对齐就会让整条 DNS 链断掉。
+	if grep -qE "^set mosdns\.config\.listen_port='953'" "${UCI_DEFAULTS}"; then
+		ok "listen_port 固定为 953（与 dns-guard 的 fallback_port 对齐）"
+	else
+		die "uci-defaults 未把 listen_port 设为 953：生成器默认 5335，会让 dns-guard 降级到没人监听的端口"
+	fi
+	if grep -qE "^set mosdns\.config\.listen_address='127\.0\.0\.1'" "${UCI_DEFAULTS}"; then
+		ok "listen_address 固定为 127.0.0.1（不做 DNS 劫持）"
+	else
+		die "uci-defaults 未把 listen_address 设为 127.0.0.1"
+	fi
+
+	# 生成器默认 remote_dns 是 tls://8.8.8.8。这条线路上 853 会被中断（SYN 无响应
+	# 或握手后单向 EOF），留着只会让"国外域名"分支卡到超时。
+	if grep -qE "^(set|add_list) mosdns\.config\.(remote_dns|local_dns)=.*tls://(1\.1\.1\.1|8\.8\.8\.8)" "${UCI_DEFAULTS}"; then
+		die "uci-defaults 把上游设成境外 DoT：WAN 直连下不可用"
+	elif grep -qE "^set mosdns\.config\.remote_dns=" "${UCI_DEFAULTS}"; then
+		ok "remote_dns 已改为国内可用上游"
+	else
+		die "uci-defaults 未覆盖 remote_dns：生成器默认 tls://8.8.8.8 在这条线路上不可用"
 	fi
 fi
-
-# 同一个目录里不允许再躺第二份 mosdns 配置：上一版就是因为留了个
-# /etc/mosdns/yunwrt.yaml 的死文件，看起来"带了配置"，实际从没被加载过。
-stray="$(find "${OVERLAY}/etc/mosdns" -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.json' \) 2>/dev/null |
-	grep -vE "/(config_custom\.yaml|.*\.meta\.json)$" || true)"
-[ -z "${stray}" ] || die "etc/mosdns 下有多余配置文件（不会被加载，只会误导排查）：${stray}"
-[ -n "${stray}" ] || ok "etc/mosdns 下只有 config_custom.yaml"
 
 echo "==> 镜像层：build/ 的 rootfs"
 
@@ -103,44 +87,36 @@ done < <(find "${ROOT_DIR}/build" -type d -path '*/build_dir/*/root-x86' 2>/dev/
 if [ -z "${rootfs}" ]; then
 	note "没有 build/ 的 rootfs（尚未 assemble/构建），跳过镜像层检查"
 else
-	# 先看 uci-defaults 在不在：它只可能来自 overlay，缺了就说明 USER_FILES 这一步
-	# 根本没跑（半成品 rootfs，或 ImageBuilder 不再叠加 files/）。此时再去比对配置
-	# 内容只会得到"被包覆盖"的错误结论，所以分开报。
 	if [ ! -f "${rootfs}/etc/uci-defaults/97-yunwrt-mosdns" ]; then
 		die "rootfs 里没有 97-yunwrt-mosdns：overlay 未叠加进 rootfs（半成品构建，或上游不再支持 FILES）；mosdns 会保持 luci-app-mosdns 的默认装态 enabled=0"
-	elif [ ! -f "${rootfs}${EXPECT_CONF}" ]; then
-		die "rootfs 里没有 ${EXPECT_CONF}：overlay 未进镜像"
-	elif ! cmp -s "${CONF}" "${rootfs}${EXPECT_CONF}"; then
-		die "rootfs 里的 ${EXPECT_CONF} 与 overlay 不一致：被 luci-app-mosdns 的 conffile 盖回去了（USER_FILES 必须在包安装之后叠加）"
 	else
-		ok "rootfs 带上了 97-yunwrt-mosdns 与 ${EXPECT_CONF}（内容与 overlay 一致）"
+		ok "rootfs 带上了 97-yunwrt-mosdns"
 	fi
 
-	# configfile 的取值必须真的在 LuCI 下拉框里，否则用户点一次保存就被重置。
-	basic="${rootfs}/www/luci-static/resources/view/mosdns/basic.js"
-	if [ -f "${basic}" ]; then
-		if grep -q "value('${EXPECT_CONF}'" "${basic}"; then
-			ok "LuCI 下拉框接受 ${EXPECT_CONF}（保存不会回滚）"
-		else
-			die "LuCI 的 basic.js 不认识 ${EXPECT_CONF}：用户保存设置时会重置为默认，mosdns 再次崩溃"
-		fi
-	else
-		note "rootfs 里没有 mosdns 的 basic.js，无法核对下拉框取值"
-	fi
-
-	# 二进制能力与配置的匹配关系，把"生成器能不能用"这件事量出来，供日后判断。
+	# 这一条是本门禁的核心：镜像里的 mosdns 必须是补丁版。三个插件名只要缺一个，
+	# 生成器写出的 /var/etc/mosdns.json 就会加载失败。
 	bin="${rootfs}/usr/bin/mosdns"
-	if [ -f "${bin}" ]; then
-		if LC_ALL=C grep -aq "stats_api" "${bin}"; then
-			note "镜像里的 mosdns 带 stats_api（补丁版）：日后可考虑改回默认生成器"
-		else
-			note "镜像里的 mosdns 不带 stats_api（上游原版）：默认生成器不可用，必须用自带配置"
-		fi
+	if [ ! -f "${bin}" ]; then
+		die "rootfs 里没有 /usr/bin/mosdns：mosdns 未进镜像"
+	else
+		for plugin in stats_api adblock_set ip_set; do
+			if LC_ALL=C grep -aq "${plugin}" "${bin}"; then
+				ok "mosdns 带 ${plugin}"
+			else
+				die "mosdns 不带 ${plugin}：装成了无补丁构建，上游生成器的配置必然加载失败（详见 docs/decisions/D15）"
+			fi
+		done
 	fi
+
+	# 配置由生成器写到 /var/etc，镜像里不该出现任何 /etc/mosdns/*.yaml。
+	# 上一版就是因为留了个从没被加载的死文件，看起来"带了配置"，实际全靠手写。
+	stray="$(find "${rootfs}/etc/mosdns" -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) 2>/dev/null || true)"
+	[ -z "${stray}" ] || die "rootfs 的 /etc/mosdns 下有多余 YAML（不会被加载，只会误导排查）：${stray}"
+	[ -n "${stray}" ] || ok "/etc/mosdns 下没有多余 YAML"
 fi
 
 if [ "${ERR}" -ne 0 ]; then
-	printf '==> mosdns 配置门禁失败：%d 项\n' "${ERR}" >&2
+	printf '==> mosdns 门禁失败：%d 项\n' "${ERR}" >&2
 	exit 1
 fi
-echo "==> mosdns 配置门禁通过"
+echo "==> mosdns 门禁通过"

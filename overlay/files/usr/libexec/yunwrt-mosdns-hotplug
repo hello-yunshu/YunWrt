@@ -2,34 +2,18 @@
 # Coalesce WAN/WAN6 ifup events without blocking netifd's hotplug queue.
 # 惰性自愈：只有在 127.0.0.1:953 确实不再服务时才重启 mosdns。
 #
-# 为什么不再盲重启：/etc/mosdns/config_custom.yaml 只监听 127.0.0.1:953，上游是
-# 国内递归 + 国内 DoH，不绑接口、不用 WAN 地址。WAN 掉线时上游查询失败，恢复后
-# 新查询自然建新连接 —— 不需要重启。反过来，
-# 在 WAN 刚恢复的那一刻主动重启 DNS，一旦 mosdns 起不来，本来能用的解析反被
-# 这个"优化"弄挂。所以现在只做兜底：探到 953 不在监听才救一次。
+# 为什么不再盲重启：mosdns 只监听 127.0.0.1:953，上游是国内递归 + 国内 DoH，
+# 不绑接口、不用 WAN 地址。WAN 掉线时上游查询失败，恢复后新查询自然建新连接
+# —— 不需要重启。反过来，在 WAN 刚恢复的那一刻主动重启 DNS，一旦 mosdns 起不来，
+# 本来能用的解析反被这个"优化"弄挂。所以现在只做兜底：探到 953 不在监听才救一次。
 #
 # State is volatile; flock releases locks even when a worker is killed.
 umask 077
 state=/var/run/yunwrt-mosdns-hotplug
 quiet_seconds=10
-# 必须是 LuCI 下拉框里承认的那个取值，否则用户一保存就被重置回默认。
-conf_expect=/etc/mosdns/config_custom.yaml
 
 enabled() {
     [ -x /etc/init.d/mosdns ] && [ "$(uci -q get mosdns.config.enabled)" = 1 ]
-}
-# sysupgrade 会保留 /etc，uci-defaults 却只在首启跑一次：升级上来的设备
-# configfile 仍是 /var/etc/mosdns.json，而那份由生成器写出的配置在未打补丁的
-# mosdns 上必然 FATAL。这里每次 WAN ifup（等价于每次开机）核一次，发现被改写
-# 就地改回来，并让 worker 强制重启一次把配置应用上。
-ensure_conf() {
-    [ "$(uci -q get mosdns.config.configfile)" = "$conf_expect" ] && return 0
-    uci -q set mosdns.config.configfile="$conf_expect" || return 1
-    uci -q commit mosdns || return 1
-    [ "$(uci -q get mosdns.config.configfile)" = "$conf_expect" ] || return 1
-    : > "$state/conf-repaired"
-    logger -t swrt-mosdns "mosdns.config.configfile 被改回非 $conf_expect，已纠正并计划重启"
-    return 0
 }
 uptime_seconds() {
     cut -d . -f 1 /proc/uptime
@@ -53,9 +37,6 @@ case "${1:-}" in
         [ "$ACTION" = ifup ] || exit 0
         case "$INTERFACE" in wan|wan6) ;; *) exit 0 ;; esac
         enabled || exit 0
-        # 配置被改回默认（sysupgrade 保留了旧 /etc，或用户在 LuCI 里存过）时
-        # 就地纠正；具体重启交给下面同一个 worker，避免阻塞 hotplug 队列。
-        ensure_conf
         flock -x 8 || exit 1
         printf '%s %s\n' "$(uptime_seconds)" "$INTERFACE" > "$state/pending"
         flock -u 8
@@ -88,16 +69,11 @@ case "${1:-}" in
             network_flush_cache
             network_is_up wan || network_is_up wan6 || continue
             # 惰性自愈：953 还在服务就什么都不做（WAN 恢复不需要重启 mosdns）。
-            # 例外：刚纠正过 configfile，此时监听还在但用的是旧配置，必须重启一次。
-            if [ -f "$state/conf-repaired" ]; then
-                rm -f "$state/conf-repaired"
-                reason="configfile was corrected"
-            elif dns_alive; then
+            if dns_alive; then
                 logger -t swrt-mosdns "WAN settled (last=$iface); :953 still serving, no restart"
                 continue
-            else
-                reason=":953 was not listening"
             fi
+            reason=":953 was not listening"
             # Do not leak lock descriptors into init/procd child processes.
             if /etc/init.d/mosdns restart </dev/null 8>&- 9>&-; then
                 logger -t swrt-mosdns "Restarted after settled WAN events (last=$iface, $reason)"
