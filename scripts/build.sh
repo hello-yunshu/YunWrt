@@ -179,6 +179,9 @@ bash "${ROOT_DIR}/scripts/check-openclash-watchdog.sh"
 echo "==> 6/7 openclash-dns-guard 门禁（overlay 进 rootfs + 开机自启）"
 bash "${ROOT_DIR}/scripts/check-dns-guard.sh"
 
+echo "==> 6/7 mosdns 配置门禁（自带配置与二进制配套、953 真能监听）"
+bash "${ROOT_DIR}/scripts/check-mosdns-config.sh"
+
 VERSION="$(sed -n 's/.*Using OpenWrt release: //p' "${IB_LOG}" | head -1)"
 [ -n "${VERSION}" ] || die "无法从构建日志解析 OpenWrt 版本"
 [ "${VERSION}" = "${VERSION_UP}" ] ||

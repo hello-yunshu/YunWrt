@@ -1,9 +1,17 @@
 #!/bin/sh
 # 首次启动把 mosdns 拉起到可判定可用的状态：监听 127.0.0.1:953。
 #
-# 背景：luci-app-mosdns 默认 enabled=0；即使打开，它的 init 脚本也会生成
-# /var/etc/mosdns.json，而 mosdns 5.3.4 不认其中的 log.size，直接 FATAL。
-# 这里改成指向自带配置 /etc/mosdns/yunwrt.yaml（init 脚本对非默认路径不做生成）。
+# 背景：luci-app-mosdns 1.7.15 的 generate_config 会写出 log.size、stats_api、
+# adblock_set 三项，只有打了 sbwml 那套补丁的 mosdns 才认。本镜像从预编译源拿到
+# 的 mosdns 5.3.4-r15 是上游原版（无补丁），加载 /var/etc/mosdns.json 直接
+# FATAL: 'log' has invalid keys: size —— 即使把 size 去掉，还会继续卡在
+# plugin type stats_api not defined。所以生成器在这套二进制上永远跑不出可用配置。
+#
+# 因此这里把 configfile 指到随镜像发布的 /etc/mosdns/config_custom.yaml。
+# 必须用这个文件名，不能用别的路径：LuCI 的 mosdns 页面把 configfile 做成了只有
+# 两个选项的下拉框（/var/etc/mosdns.json 与 /etc/mosdns/config_custom.yaml）。
+# 指向第三个路径时，用户只要在 LuCI 点一次保存，值就会被重置回默认，
+# mosdns 随即崩掉，而且没有任何报错——这个坑已经在现网踩过一次。
 
 # 这里一律 exit 1 而不是 exit 0：uci-defaults 成功即被删除，
 # 静默放过等于"mosdns 悄悄没起来"，只有丢出非 0 才会保留脚本、下轮重试。
@@ -11,8 +19,8 @@
 	echo "ERROR: /etc/config/mosdns missing（luci-app-mosdns 未安装）" >&2
 	exit 1
 }
-[ -f /etc/mosdns/yunwrt.yaml ] || {
-	echo "ERROR: /etc/mosdns/yunwrt.yaml missing" >&2
+[ -f /etc/mosdns/config_custom.yaml ] || {
+	echo "ERROR: /etc/mosdns/config_custom.yaml missing" >&2
 	exit 1
 }
 [ -x /etc/init.d/mosdns ] || {
@@ -22,7 +30,13 @@
 
 uci -q batch <<EOF
 set mosdns.config.enabled='1'
-set mosdns.config.configfile='/etc/mosdns/yunwrt.yaml'
+set mosdns.config.configfile='/etc/mosdns/config_custom.yaml'
+# adblock=0：广告拦截只有生成器会用到（adblock_set 插件），本二进制没有该插件，
+# 开着只会让 init 脚本后台去下载一堆清单写进 /etc/mosdns/rule，纯浪费闪存写。
+# 域名拦截实际由 OpenClash 侧的规则集负责。
+set mosdns.config.adblock='0'
+# 同理，geo 自动更新下回来的是本配置根本读不到的 geosite.txt。
+set mosdns.config.geo_auto_update='0'
 EOF
 uci -q commit mosdns
 
@@ -31,7 +45,7 @@ uci -q commit mosdns
 	echo "ERROR: mosdns.config.enabled 回读非 1" >&2
 	exit 1
 }
-[ "$(uci -q get mosdns.config.configfile)" = "/etc/mosdns/yunwrt.yaml" ] || {
+[ "$(uci -q get mosdns.config.configfile)" = "/etc/mosdns/config_custom.yaml" ] || {
 	echo "ERROR: mosdns.config.configfile 回读不符" >&2
 	exit 1
 }

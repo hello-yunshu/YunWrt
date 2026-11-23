@@ -1,0 +1,79 @@
+# YunWrt 自带的 mosdns 配置（v5 语法），装到 /etc/mosdns/config_custom.yaml。
+#
+# 为什么不用 luci-app-mosdns 生成 /var/etc/mosdns.json：
+#   luci-app-mosdns 1.7.15 的 generate_config 会写出 log.size、stats_api、adblock_set
+#   三项，只有打了 sbwml 那套补丁的 mosdns 才认。而本镜像从预编译源取到的
+#   mosdns 5.3.4-r15 是上游原版（无补丁），一加载就 FATAL 退出。
+#   —— 所以这里绕开生成器，走 uci 里 configfile 的第二个合法取值。
+#
+# 为什么必须叫 config_custom.yaml：
+#   LuCI 的 mosdns 页面把 configfile 做成只有两个选项的下拉框
+#   （/var/etc/mosdns.json 与 /etc/mosdns/config_custom.yaml）。指向任何第三个
+#   路径，用户一旦在 LuCI 点保存就会被重置回默认值，mosdns 随即崩掉且无声。
+#
+# 本文件只做一件事：在 127.0.0.1:953 提供 DNS 入口，供 openclash-dns-guard
+# 在 OpenClash(653) 挂掉时把 dnsmasq 上游切过来。它跑在"没有代理"的前提下，
+# 所以上游必须是直连可达、且地理视图是国内的服务器：
+#   - tls://1.1.1.1 / 8.8.8.8 这类境外 DoT 直连不通或会 TLS 被重置，且返回
+#     海外 CDN 节点（EdgeOne 之类的 geo steering 会给出新加坡 IP）。
+#   - 下面这组实测：223.5.5.5 29ms、223.6.6.6 28ms、114.114.114.114 14ms；
+#     DoH 走阿里/腾讯，TLS 建连 47ms/145ms，作为 UDP 全挂时的兜底。
+#
+# 不使用 geosite 分流：mosdns 的 domain_set 在文件缺失时是 FATAL，
+# 会把"备用解析器"变成"又一个起不来的服务"。这里全部走国内递归，
+# 换来的是无论 /var/mosdns 是否生成成功都能起来。
+
+log:
+  level: warn
+  file: /var/log/mosdns.log
+
+plugins:
+  - tag: cache_main
+    type: cache
+    args:
+      size: 8192
+      lazy_cache_ttl: 600
+
+  # 主路径：国内递归，快。
+  - tag: forward_udp
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "223.5.5.5"
+        - addr: "223.6.6.6"
+        - addr: "114.114.114.114"
+
+  # 兜底路径：UDP 全无响应时改走国内 DoH，抗污染也抗 UDP 限速。
+  - tag: forward_doh
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "https://dns.alidns.com/dns-query"
+          bootstrap: "223.5.5.5"
+        - addr: "https://doh.pub/dns-query"
+          bootstrap: "223.5.5.5"
+
+  - tag: main_sequence
+    type: sequence
+    args:
+      - exec: $cache_main
+      - matches: has_resp
+        exec: accept
+      - exec: $forward_udp
+      - matches: has_resp
+        exec: accept
+      - exec: $forward_doh
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: main_sequence
+      listen: "127.0.0.1:953"
+
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: "127.0.0.1:953"
