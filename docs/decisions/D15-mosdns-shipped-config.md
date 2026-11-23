@@ -52,14 +52,31 @@ upstreams:
   - addr: "tls://8.8.8.8"
 ```
 
-从路由器自身出口实测（`pppoe-wan`，江苏电信）：
+从路由器实测：
 
 ```
 1.1.1.1:853   CONNECTED → SSL routines::unexpected eof while reading    Cipher is (NONE)
 8.8.8.8:853   CONNECTED → Cipher is TLS_AES_256_GCM_SHA384              OK
 ```
 
-`concurrent: 2` 的下游只有两条腿，其中一条每次都要走到 TLS 被重置；而唯一通的那条是海外视图 —— 这正是 `fbcontent.cn` 被 EdgeOne 判到新加坡节点的原因（国内直连 218.92.141.107，经海外 DoH 拿到 43.169.32.127）。备用解析器返回错误的 CDN 节点，比返回 SERVFAIL 更难排查。
+看起来"一条死一条活"，但抓包说明这两条腿根本不是同一种状态：
+
+```
+# 8.8.8.8: 在 pppoe-wan 上一条包都没有，全部出现在 clash 的 TUN 上
+tcpdump -i utun      host 8.8.8.8 and port 853   → SYN / SYN-ACK / ClientHello 1551B / ServerHello 5705B
+tcpdump -i pppoe-wan host 8.8.8.8 and port 853   → 0 包（7 秒窗口）
+ip route get 8.8.8.8 mark 0x162                  → dev utun table 354
+
+# 1.1.1.1: 走真实 WAN 出口
+tcpdump -i pppoe-wan host 1.1.1.1 and port 853   → SYN 从 180.116.49.106 发出，无 SYN-ACK，5 次重传
+```
+
+分工来自 clash 规则：`8.8.8.8` 命中 `- GEOIP,google,Google`（Google 组 → 节点选择 → 代理），`1.1.1.1` 不命中任何前置规则，落到 `- MATCH,其他`，而"其他"组当前是 **DIRECT**。也就是说：
+
+- **1.1.1.1 是直连出 WAN 的**，撞上链路干扰：有时 SYN 被丢弃（无 SYN-ACK），有时 TCP 建连后收到 EOF —— `SSL handshake has read 0 bytes and written 1558 bytes`、`no peer certificate available`，ClientHello 发出去一个字节都没回。注意不是 RST（那会报 `Connection reset by peer`），也不是端口关闭（那会立刻 RST），是干净的单向中断。
+- **8.8.8.8 之所以"通"，是因为它被分流进了代理**。它的通不能证明这条线路能直连 8.8.8.8:853。
+
+这个区别对本决策是决定性的，而不是细节：mosdns 存在的意义是**代理已经挂掉时**兜底。那一刻 8.8.8.8 走不了代理、1.1.1.1 直连被墙 —— **两条腿同时废**，比"一条死一条活"更糟。另外，8.8.8.8 经代理拿到的必然是海外视图，这正是 `fbcontent.cn` 被 EdgeOne 判到新加坡节点的原因（国内直连 218.92.141.107，经海外 DoH 拿到 43.169.32.127）。备用解析器返回错误的 CDN 节点，比返回 SERVFAIL 更难排查。
 
 顺带记一笔：uci 里 `local_dns='61.147.37.1' '218.2.135.1' '221.228.255.1'`（生成器用）三个在这条线路上全部无响应，`119.29.29.29` 也不通。实测可用且快的是 `223.5.5.5` 29ms、`223.6.6.6` 28ms、`114.114.114.114` 14ms。
 
