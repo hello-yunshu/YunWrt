@@ -2,6 +2,6 @@
   "kind": "add",
   "upstream_path": "etc/uci-defaults/97-yunwrt-nginx-http",
   "asserts": [],
-  "reason": "D13：删掉 nginx-util 的 _redirect2ssl（302 强跳 https），把 80 挂到 _lan，明文 LuCI 只在 LAN 可达；nginx -t 不过即回滚",
+  "reason": "D13：LuCI 只走明文 http。删 _redirect2ssl 段，_lan 只监听 80、不再保留 443（443 无人监听后浏览器升级 https 会立刻失败并静默回退 http）；UCI 与 /etc/nginx/uci.conf 双写，因为后者是静态文件、nginx-util init_lan 实测不会重建它；nginx -t 不过即回滚",
   "owner": "yunwrt"
 }

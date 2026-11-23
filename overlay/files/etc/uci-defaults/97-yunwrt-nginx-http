@@ -1,16 +1,29 @@
 #!/bin/sh
-# D13：LuCI 管理面取消 http→https 强制跳转，80 直接服务 LuCI。
+# D13（修订）：LuCI 管理面只走明文 http，彻底消除浏览器的 https 自动升级。
 #
-# 现状（上游 nginx-util 的默认 /etc/config/nginx）：80 端口上只有一个
-# _redirect2ssl server，把所有明文请求 302 到 https；而 443 用的是自签证书
-# （nginx._lan.uci_manage_ssl='self-signed'），浏览器必然弹警告。没有受信任
-# 证书时，"强制 https" 换不来任何机密性，只是每次访问多点一次"继续前往"。
+# —— 旧版为什么没解决用户看到的「跳转」 ——
+#   旧版只删了 _redirect2ssl 的 302、把 80 挂到 _lan，443 照旧监听。
+#   但用户遇到的「自动跳 https」根本不是服务端 302：
+#   Edge / Chrome 的 HTTPS-Upgrades 在发请求之前就先把 http 升级成 https，
+#   443 上挂的是自签证书（nginx._lan.uci_manage_ssl='self-signed'），
+#   点过一次「继续前往」之后浏览器就一路 https —— 显式敲 http:// 也拦不住。
+#   只要 443 还在监听，「取消 302」就是白做。
 #
-# 做法：
-#   1. 删掉 _redirect2ssl 段（那个 302）
-#   2. 把 80 / [::]:80 挂到 _lan 段上 —— _lan 已 include restrict_locally，
-#      只放行回环与私有网段（末尾 deny all），所以明文入口仍然只在 LAN
-#   3. 443 原样保留，既有 https 书签与 nginx-manager 的 SSL 站点都不受影响
+# —— 旧版还有一处假成功 ——
+#   regen_and_test() 里 `rm -f "$(readlink "${UCI_CONF}")"`：
+#   /etc/nginx/uci.conf 是普通文件而不是符号链接，readlink 返回空串，
+#   `rm -f ""` 什么都没删掉；而实测 nginx-util init_lan 也根本不会重建这个文件
+#   （把 uci.conf 移走后再跑 init_lan，它不会重新生成）。
+#   于是 uci 改了、nginx -t 过了、exit 0 了，但 nginx 实际加载的配置文件
+#   一个字节都没变 —— 日志报「已取消」，用户那边照样跳 https。
+#
+# —— 现在的做法 ——
+#   1. UCI 与 "${UCI_CONF}" 双写：后者才是 nginx -c 真正加载的文件，必须直接改
+#   2. 删掉 _redirect2ssl 段，_lan 只监听 80，不再保留任何 ssl 监听
+#   3. 443 无人监听 → 浏览器升级 https 立刻连接失败 → 静默回退到 http
+#
+# 代价：不再提供 https 管理入口。内网 + 自签证书的前提下，强制 https 本来就
+# 换不来真正的机密性（每次都要点「继续前往」），这是刻意的取舍。
 #
 # 两处非 0 退出是刻意的（沿用本目录既有约定）：uci-defaults 成功即被删除，
 # 静默 exit 0 会让「overlay 没生效」看起来像成功。
@@ -22,55 +35,78 @@ die() {
 }
 
 [ -x /usr/sbin/nginx ] || die "nginx 未安装"
-[ -x /usr/bin/nginx-util ] || die "nginx-util 未安装（nginx-ssl-util 缺失）"
 
 eval "$(/usr/bin/nginx-util get_env 2>/dev/null)" || die "nginx-util get_env 失败"
 [ -n "${LAN_NAME:-}" ] || die "get_env 未给出 LAN_NAME"
 [ -n "${UCI_CONF:-}" ] || die "get_env 未给出 UCI_CONF"
+[ -f "${UCI_CONF}" ] || die "找不到 ${UCI_CONF}（nginx 配置未生成？）"
 
 SEC="nginx.${LAN_NAME}"
 uci -q get "${SEC}" >/dev/null 2>&1 || die "uci 缺少 server 段 ${SEC}"
 
-BAK="$(mktemp /tmp/nginx.config.XXXXXX)" || die "无法创建备份"
-cp /etc/config/nginx "${BAK}" || die "备份 /etc/config/nginx 失败"
+BAK_UCI="$(mktemp /tmp/nginx.config.XXXXXX)" || die "无法创建备份"
+BAK_CONF="$(mktemp /tmp/nginx.uciconf.XXXXXX)" || die "无法创建备份"
+cp /etc/config/nginx "${BAK_UCI}" || die "备份 /etc/config/nginx 失败"
+cp "${UCI_CONF}" "${BAK_CONF}" || die "备份 ${UCI_CONF} 失败"
 
-# 1. 去掉 302 强跳段（段名来自 nginx-util 的 nginx.config，固定不变量）
+restore() {
+	cp "${BAK_UCI}" /etc/config/nginx
+	uci commit nginx >/dev/null 2>&1
+	cp "${BAK_CONF}" "${UCI_CONF}"
+	rm -f "${BAK_UCI}" "${BAK_CONF}"
+}
+
+# --- 1. UCI 侧 ---
+# 1a. 去掉 302 强跳段（段名来自 nginx-util 的 nginx.config，固定不变量）
 uci -q delete nginx._redirect2ssl
 
-# 2. 80 挂到 _lan（幂等：先删后加，避免每次开机重复堆 listen）
-uci -q del_list "${SEC}.listen=80"
-uci -q del_list "${SEC}.listen=[::]:80"
+# 1b. _lan 只保留明文 80；整体删除再重建，保证幂等
+uci -q delete "${SEC}.listen"
 uci add_list "${SEC}.listen=80"
 uci add_list "${SEC}.listen=[::]:80"
 
-uci commit nginx || {
-	cp "${BAK}" /etc/config/nginx
-	rm -f "${BAK}"
-	die "uci commit nginx 失败，已还原"
-}
+uci commit nginx || { restore; die "uci commit nginx 失败，已还原"; }
 
-regen_and_test() {
-	rm -f "$(readlink "${UCI_CONF}" 2>/dev/null)" 2>/dev/null
-	/usr/bin/nginx-util init_lan >/dev/null 2>&1 || return 1
-	[ -e "${UCI_CONF}" ] || return 1
-	/usr/sbin/nginx -t -c "${UCI_CONF}" -g 'daemon off;' >/dev/null 2>&1
-}
-
-if ! regen_and_test; then
-	cp "${BAK}" /etc/config/nginx
-	uci commit nginx
-	regen_and_test >/dev/null 2>&1
-	rm -f "${BAK}"
-	die "80 加入 _lan 后未通过 nginx -t，已回滚（强制 https 保持原样）"
+# --- 2. "${UCI_CONF}" 侧（nginx 真正读的文件）---
+# 2a. 443 ssl -> 80（保留 ssl_certificate 行无害：listen 无 ssl 时 nginx 会忽略）
+if grep -q 'listen 443' "${UCI_CONF}"; then
+	sed -i \
+		-e 's/listen 443 ssl default_server;/listen 80;/' \
+		-e 's/listen \[::\]:443 ssl default_server;/listen [::]:80;/' \
+		-e 's/listen 443 ssl;/listen 80;/' \
+		-e 's/listen \[::\]:443 ssl;/listen [::]:80;/' \
+		"${UCI_CONF}"
 fi
-rm -f "${BAK}"
 
-# 已在运行就平滑重载；未运行则不用管，开机 start 时读到的就是新配置
+# 2b. 删掉 _redirect2ssl 段，否则它和 _lan 抢同一个 80
+if grep -q "see uci show 'nginx._redirect2ssl'" "${UCI_CONF}"; then
+	awk '
+		/see uci show .nginx\._redirect2ssl/ { skip = 1 }
+		skip && /^\t\}$/ { skip = 0; next }
+		!skip { print }
+	' "${UCI_CONF}" > "${UCI_CONF}.new" || { restore; die "裁剪 _redirect2ssl 段失败"; }
+	mv "${UCI_CONF}.new" "${UCI_CONF}"
+fi
+
+# --- 3. 校验：语法必须过，且不能残留在监听 443 ---
+if ! /usr/sbin/nginx -t -c "${UCI_CONF}" -g 'daemon off;' >/dev/null 2>&1; then
+	restore
+	die "改后 nginx -t 不通过，已回滚"
+fi
+
+if grep -qE '^\s*listen .*443' "${UCI_CONF}"; then
+	restore
+	die "${UCI_CONF} 里仍有监听 443（上游配置格式可能变了），已回滚"
+fi
+
+rm -f "${BAK_UCI}" "${BAK_CONF}"
+
+# 已在运行就平滑重载；未运行则开机 start 时读到的就是新配置
 if [ -f /var/run/nginx.pid ]; then
 	/etc/init.d/nginx reload >/dev/null 2>&1 ||
 		/etc/init.d/nginx restart >/dev/null 2>&1 ||
 		die "nginx 重载失败"
 fi
 
-logger -t nginx-http "已取消 http→https 强跳：${LAN_NAME} 同时监听 80 与 443，明文入口仅限 LAN"
+logger -t nginx-http "LuCI 仅明文 http：${LAN_NAME} 只监听 80，443 不再监听（浏览器不会再自动升级 https）"
 exit 0
