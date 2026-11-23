@@ -26,6 +26,12 @@ ALLOW_RE='\$\{\{|GITHUB_TOKEN|your_|example\.(com|org)|CHANGEME|placeholder|REDA
 # 仅在带显式 scheme 时放行；裸 IP 仍然命中，避免顺带放过订阅服务器地址。
 DNS_RESOLVER_ALLOW_RE='(tls|https|quic|h3)://(1\.1\.1\.1|1\.0\.0\.1|8\.8\.8\.8|8\.8\.4\.4|9\.9\.9\.9|149\.112\.112\.112|223\.5\.5\.5|223\.6\.6\.6|119\.29\.29\.29|114\.114\.114\.114)([^0-9.]|$)'
 
+# 逐行例外：源码里必须以裸 IP 出现的国内公共递归（阿里/腾讯/114 那几组）没法靠
+# scheme 放行，又确实不是凭据。这类行在行尾加 `# yunwrt-scan: allow-public-ip` 显式豁免。
+# 注意它只解除「公网 IPv4 / IPv6」两条规则的命中；凭据赋值、私钥、订阅链接、UUID
+# 等规则照旧生效——否则这个标记就成了给真凭据开后门的开关。
+IP_ALLOW_MARKER_RE='yunwrt-scan:[[:space:]]*allow-public-ip'
+
 # name | ERE
 PATTERNS=(
 	'私钥|-----BEGIN [A-Z ]*PRIVATE KEY-----'
@@ -71,6 +77,7 @@ judge_file() {
 		}
 		if (bad) print
 	}' "${lines}" | grep -vE -- "${ALLOW_RE}" | grep -vE -- "${DNS_RESOLVER_ALLOW_RE}" |
+		grep -vE -- "${IP_ALLOW_MARKER_RE}" |
 		while IFS= read -r l; do hit '公网 IPv4' "${l}"; done
 
 	# 公网 IPv6：只看 2000::/3（当前全球单播分配段），天然排除时间戳、fe80::、fc00::、ff02::
@@ -84,7 +91,7 @@ judge_file() {
 			if (ip ~ /^[23][0-9a-fA-F]{3}:/ && ip !~ /^2001:db8:/) { bad = 1 }
 		}
 		if (bad) print
-	}' "${lines}" | grep -vE -- "${ALLOW_RE}" |
+	}' "${lines}" | grep -vE -- "${ALLOW_RE}" | grep -vE -- "${IP_ALLOW_MARKER_RE}" |
 		while IFS= read -r l; do hit '公网 IPv6' "${l}"; done
 }
 
@@ -161,6 +168,25 @@ self_test() {
 		return 1
 	fi
 	echo "ok  self-test: 公网 IP 命中，版本号/时间戳/内网地址放行"
+
+	# 4) 逐行豁免只解公网 IP，不能顺带放过凭据：带标记的行里塞真 token 必须照红。
+	printf 'a:1\tns %s  # yunwrt-scan: allow-public-ip\nb:1\ttoken = "%s"  # yunwrt-scan: allow-public-ip\n' \
+		"${ip4}" "${gh_sample}" >"${tmp}/lines"
+	: >"${HITS}"
+	judge_file "${tmp}/lines"
+	if grep -qF '[公网 IPv4]' "${HITS}"; then
+		echo "FAIL self-test: allow-public-ip 标记没生效（带标记的公网 IP 仍被误报）" >&2
+		cat "${HITS}" >&2
+		rm -rf "${tmp}"
+		return 1
+	fi
+	if ! grep -qF "${gh_sample}" "${HITS}"; then
+		echo "FAIL self-test: allow-public-ip 标记顺带放过了凭据（门禁被开后门）" >&2
+		cat "${HITS}" >&2
+		rm -rf "${tmp}"
+		return 1
+	fi
+	echo "ok  self-test: allow-public-ip 只解公网 IP，同行的 token 仍然命中"
 	rm -rf "${tmp}"
 }
 

@@ -50,12 +50,13 @@ o.depends('configfile', '/var/etc/mosdns.json');
 3. **发行版限制**：`releaseSeries ["25.12"]`，架构限 `x86_64` + `aarch64_generic`。只声明实际会验证的组合。
 4. **构建期门禁**（`scripts/check-mosdns-config.sh`）：
    - 静态层：overlay 不得再有 `/etc/mosdns`；`uci-defaults` 必须把 `configfile` 指向 `/var/etc/mosdns.json` 并回读；`listen_port=953`、`listen_address=127.0.0.1`、`redirect=0`；`remote_dns` 不得是境外 DoT。
-   - 镜像层：rootfs 里的 `/usr/bin/mosdns` 必须同时含 `stats_api`、`adblock_set`、`ip_set` 三个插件名；`/etc/mosdns` 下不得有多余 YAML。
+   - 镜像层：rootfs 里的 `/usr/bin/mosdns` 必须同时含 `stats_api`、`adblock_set`、`ip_set` 三个插件名；`/etc/mosdns` 下除包自带的 `config_custom.yaml` 外不得有其他 YAML（该文件是 `luci-app-mosdns` 声明为 `conffiles` 的界面模板，`configfile` 指向 `/var/etc` 时不会加载，放行它不是放松门禁：静态层已确保 overlay 不再提供 `/etc/mosdns`，这条挡的是"我们又塞了一份覆盖包自带文件"）。
 5. **发布侧另一道门禁**：`yun-openwrt-packages/scripts/verify_mosdns_binary.py` 在打包前解包实跑候选构建——插件注册、`log.size` 接受、命中 `adblock_set` 的查询返回 NXDOMAIN 且被 `stats_api` 计数。两道门禁一在源、一在镜像，互相独立。
 6. **上游地址固定为国内可用值**：生成器默认 `remote_dns=tls://8.8.8.8`，而这条线路上 853 会被中断（SYN 无响应或握手后单向 EOF），留着只会让"国外域名"分支卡到超时。`uci-defaults` 改为 `https://dns.alidns.com/dns-query`。
 7. **端口必须显式对齐 953**：生成器默认 `0.0.0.0:5335`，而 `openclash-dns-guard` 的 `fallback_port` 与 OpenClash 指向 mosdns 的地址都是 953。不改就会让整条 DNS 链断掉。
 8. **构建期自有 feed 必须排在第一位**：上游 `build/scripts/build.sh` 会把 `qiusimons.github.io/OpenWrt-Add` 用 `sed -i "1i"` 插到 ImageBuilder `repositories` 首行，把自有 feed 挤到第二位。mosdns 在两个源里是同名同版本，源顺序就决定了装哪一份。`prepare_imagebuilder()` 因此先把 OpenWrt-Add **追加到末尾**，让上游那句 `if ! grep -qxF` 幂等检查命中而不再插入；上游跑完后还会再复核首行确实是自有 feed，不符即失败。
 9. **发布侧版本号唯一化**：`metadata/mainstream-support.json` 给 `mosdns` 与 `luci-app-mosdns` 声明 `"localRelease": "1"`，产物 `PKG_RELEASE` 变成 `上游 × 100 + 1`（r15 → r1501，r1 → r101）。apk 版本比较因此天然压过 OpenWrt-Add 的同版本包，与仓库顺序无关。详见 `yun-openwrt-packages/docs/MOSDNS.md`。
+10. **构建前先确认 feed 已就绪**：配套版只在 `yun-openwrt-packages` 的 Pages 部署完成后才对 apk 可见，而两侧提交节奏不同步——本仓库先跑、feed 后部署的那段空窗期里，apk 会静默退回 OpenWrt-Add 的无补丁构建，直到 8 分钟后镜像层门禁才报「不带 `stats_api`」。`build.sh` 的 `check_feed_ready()` 因此在动手前先读线上 `source-lock.json`，缺 `mosdns`/`luci-app-mosdns` 就直接停，并要求等 feed 部署完成再重跑。
 
 ## 后果
 

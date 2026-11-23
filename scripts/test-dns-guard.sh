@@ -219,21 +219,21 @@ ok "legacy fallback without snapshot fails closed"
 
 # ---- 2026-11-23 现网回归：快照污染导致静默永久降级 / wan 兜底用了死 DNS ----
 
-# wan 模式不能依赖运营商下发的 DNS（实测 218.4.4.4 / 218.2.2.2 全无响应）
+# wan 模式不能依赖运营商下发的 DNS（实测 218.4.4.4 / 218.2.2.2 全无响应）  # yunwrt-scan: allow-public-ip
 UCI_CALLS=""
 RELOADS=0
 UCI_SERVERS=''
 apply_wan || fail "wan apply should succeed"
-case "$UCI_CALLS" in *' add_list dhcp.@dnsmasq[0].server=223.5.5.5'*) ;; *) fail "wan apply missed built-in resolver" ;; esac
-case "$UCI_CALLS" in *' add_list dhcp.@dnsmasq[0].server=114.114.114.114'*) ;; *) fail "wan apply missed third built-in resolver" ;; esac
+case "$UCI_CALLS" in *' add_list dhcp.@dnsmasq[0].server=223.5.5.5'*) ;; *) fail "wan apply missed built-in resolver" ;; esac  # yunwrt-scan: allow-public-ip
+case "$UCI_CALLS" in *' add_list dhcp.@dnsmasq[0].server=114.114.114.114'*) ;; *) fail "wan apply missed third built-in resolver" ;; esac  # yunwrt-scan: allow-public-ip
 case "$UCI_CALLS" in *' set dhcp.@dnsmasq[0].noresolv=1'*) ;; *) fail "wan apply missed noresolv" ;; esac
 case "$UCI_CALLS" in *' set dhcp.@dnsmasq[0].resolvfile='*) fail "wan apply must not depend on resolv.conf.auto" ;; esac
 assert_eq "$RELOADS" 1 "wan apply triggers dnsmasq reload"
 ok "wan apply uses built-in CN resolvers"
 
-UCI_SERVERS='223.5.5.5 223.6.6.6 114.114.114.114'
+UCI_SERVERS='223.5.5.5 223.6.6.6 114.114.114.114'  # yunwrt-scan: allow-public-ip
 wan_servers_ok || fail "intact wan upstream list must be accepted"
-UCI_SERVERS='223.5.5.5 223.6.6.6'
+UCI_SERVERS='223.5.5.5 223.6.6.6'  # yunwrt-scan: allow-public-ip
 wan_servers_ok && fail "wan upstream drift must be detected"
 ok "wan mode detects upstream drift"
 

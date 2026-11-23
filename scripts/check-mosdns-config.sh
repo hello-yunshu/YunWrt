@@ -108,11 +108,23 @@ else
 		done
 	fi
 
-	# 配置由生成器写到 /var/etc，镜像里不该出现任何 /etc/mosdns/*.yaml。
+	# 配置由生成器写到 /var/etc，rootfs 里不该出现我们自己的 /etc/mosdns/*.yaml。
 	# 上一版就是因为留了个从没被加载的死文件，看起来"带了配置"，实际全靠手写。
-	stray="$(find "${rootfs}/etc/mosdns" -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) 2>/dev/null || true)"
+	#
+	# 但有一个例外必须放行：luci-app-mosdns 自己的 Makefile 就装了一份
+	#   /etc/mosdns/config_custom.yaml   （sbwml 上游 root/etc/mosdns/ 下的模板）
+	# 它是界面「自定义配置」的落点，configfile 钉在 /var/etc/mosdns.json 时不会被加载。
+	# 静态层已经断言 overlay 里没有 /etc/mosdns，所以 rootfs 里出现的 YAML 只可能来自包，
+	# 这一条要挡的是「我们自己又塞了一份覆盖包自带文件」——不是包自带那份。
+	pkg_own="${rootfs}/etc/mosdns/config_custom.yaml"
+	stray="$(find "${rootfs}/etc/mosdns" -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) 2>/dev/null |
+		grep -vxF "${pkg_own}" || true)"
 	[ -z "${stray}" ] || die "rootfs 的 /etc/mosdns 下有多余 YAML（不会被加载，只会误导排查）：${stray}"
-	[ -n "${stray}" ] || ok "/etc/mosdns 下没有多余 YAML"
+	if [ -f "${pkg_own}" ]; then
+		ok "/etc/mosdns 下只有包自带的 config_custom.yaml（configfile 指向 /var/etc，不会被加载）"
+	else
+		ok "/etc/mosdns 下没有多余 YAML"
+	fi
 fi
 
 if [ "${ERR}" -ne 0 ]; then

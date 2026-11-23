@@ -20,7 +20,7 @@ BOOT_GRACE=90
 RESTORE_ALERT_GAP=300
 DEGRADE_HARD_MAX=140
 # wan 模式（653 与 953 同时不可用）使用的硬编码国内递归。见 apply_wan 的注释。
-WAN_FALLBACK_SERVERS="223.5.5.5 223.6.6.6 114.114.114.114"
+WAN_FALLBACK_SERVERS="223.5.5.5 223.6.6.6 114.114.114.114"  # yunwrt-scan: allow-public-ip
 
 LOG_FILE="/var/log/openclash-dns-guard.log"
 LOG_FALLBACK=""
@@ -538,10 +538,10 @@ apply_fallback() {
 
 apply_wan() {
 	# 不用 /tmp/resolv.conf.d/resolv.conf.auto：那里面是 PPPoE 下发的运营商 DNS，
-	# 实测这台线路上 218.4.4.4 / 218.2.2.2 连续 6 次全部无响应。切过去等于把全网
+	# 实测这台线路上 218.4.4.4 / 218.2.2.2 连续 6 次全部无响应。切过去等于把全网  # yunwrt-scan: allow-public-ip
 	# DNS 从"还能解析"变成"彻底解析不了"，而 wan 是最后一级兜底，没有下一级了。
-	# 因此硬编码一组实测可用的国内递归（223.5.5.5 27-31ms / 223.6.6.6 28ms /
-	# 114.114.114.114 14ms）。
+	# 因此硬编码一组实测可用的国内递归（223.5.5.5 27-31ms / 223.6.6.6 28ms /  # yunwrt-scan: allow-public-ip
+	# 114.114.114.114 14ms）。  # yunwrt-scan: allow-public-ip
 	uci -q del dhcp.@dnsmasq[0].server
 	for _ws in $WAN_FALLBACK_SERVERS; do
 		uci -q add_list dhcp.@dnsmasq[0].server="$_ws"

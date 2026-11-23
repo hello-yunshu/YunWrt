@@ -23,7 +23,35 @@ bash "${ROOT_DIR}/scripts/check-packages.sh"
 echo "==> 4/7 组装"
 bash "${ROOT_DIR}/scripts/assemble.sh"
 
-echo "==> 5/7 预置 ImageBuilder（注入自有 feed）"
+echo "==> 5/7 feed 就绪检查 + 预置 ImageBuilder（注入自有 feed）"
+
+# 自有 feed 的 mosdns/luci-app-mosdns 是后加的，而 feed 走 Pages 部署，跟本仓库的
+# 提交不是同一个节奏：本仓库先跑、feed 流水线后部署完，这段空窗期里 apk 只能看到
+# OpenWrt-Add 的同名 r15 无补丁构建，一路静默装进去，直到 8 分钟后的 mosdns 门禁
+# 才报「不带 stats_api」——看起来像代码坏了，实际是 feed 还没发布。
+# 这里先花两秒确认线上 feed 已带上配套版，把空窗期变成一句能看懂的话。
+# 依据是同上一次 Pages 部署一起发布的 source-lock.json（明文 JSON），它在就说明
+# 索引也是同一批——比解 apk 的 .adb 索引稳。
+check_feed_ready() {
+	local feed url lock pkg missing=""
+	feed="$(grep -v '^[[:space:]]*#' "${ROOT_DIR}/overlay/files/etc/apk/repositories.d/yun-feed.list" |
+		awk 'NF' | head -1)"
+	[ -n "${feed}" ] || die "yun-feed.list 里没有 feed 地址"
+	# .../<版本>/<arch>/packages.adb -> .../source-lock.json
+	url="$(printf '%s' "${feed}" | sed -E 's#/[^/]+/[^/]+/packages\.adb$##')/source-lock.json"
+	lock="$(curl -fsSL --retry 3 --retry-delay 2 "${url}" || true)"
+	[ -n "${lock}" ] || die "取不到 feed 的 source-lock.json：${url}"
+	for pkg in mosdns luci-app-mosdns; do
+		printf '%s' "${lock}" | grep -q "\"${pkg}\"" || missing="${missing} ${pkg}"
+	done
+	[ -z "${missing}" ] ||
+		die "线上 feed 还没发布配套版（缺${missing}）：继续构建只会装到 OpenWrt-Add 的无补丁 mosdns。
+      等 yun-openwrt-packages 的 feed 流水线部署完成（Pages 部署成功）再重跑，别在这里绕。"
+	echo "    feed 已带 mosdns / luci-app-mosdns（${url}）"
+}
+check_feed_ready
+
+
 # 上游 build.sh 只把自己维护的 feed 写进 IB 的 repositories；
 # overlay/files 里的 yun-feed.list 只进镜像 rootfs，构建期 apk 看不到 → 自有包会被跳过。
 # 因此先按上游即将使用的版本号把 IB 解包到位，注入 feed 地址与公钥；上游看到目录已存在即不再下载。
