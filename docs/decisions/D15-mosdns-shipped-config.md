@@ -54,11 +54,13 @@ o.depends('configfile', '/var/etc/mosdns.json');
 5. **发布侧另一道门禁**：`yun-openwrt-packages/scripts/verify_mosdns_binary.py` 在打包前解包实跑候选构建——插件注册、`log.size` 接受、命中 `adblock_set` 的查询返回 NXDOMAIN 且被 `stats_api` 计数。两道门禁一在源、一在镜像，互相独立。
 6. **上游地址固定为国内可用值**：生成器默认 `remote_dns=tls://8.8.8.8`，而这条线路上 853 会被中断（SYN 无响应或握手后单向 EOF），留着只会让"国外域名"分支卡到超时。`uci-defaults` 改为 `https://dns.alidns.com/dns-query`。
 7. **端口必须显式对齐 953**：生成器默认 `0.0.0.0:5335`，而 `openclash-dns-guard` 的 `fallback_port` 与 OpenClash 指向 mosdns 的地址都是 953。不改就会让整条 DNS 链断掉。
+8. **构建期自有 feed 必须排在第一位**：上游 `build/scripts/build.sh` 会把 `qiusimons.github.io/OpenWrt-Add` 用 `sed -i "1i"` 插到 ImageBuilder `repositories` 首行，把自有 feed 挤到第二位。mosdns 在两个源里是同名同版本，源顺序就决定了装哪一份。`prepare_imagebuilder()` 因此先把 OpenWrt-Add **追加到末尾**，让上游那句 `if ! grep -qxF` 幂等检查命中而不再插入；上游跑完后还会再复核首行确实是自有 feed，不符即失败。
+9. **发布侧版本号唯一化**：`metadata/mainstream-support.json` 给 `mosdns` 与 `luci-app-mosdns` 声明 `"localRelease": "1"`，产物 `PKG_RELEASE` 变成 `上游 × 100 + 1`（r15 → r1501，r1 → r101）。apk 版本比较因此天然压过 OpenWrt-Add 的同版本包，与仓库顺序无关。详见 `yun-openwrt-packages/docs/MOSDNS.md`。
 
 ## 后果
 
 - LuCI 的「基本设置 / 高级 / 统计 / 日志 / 规则 / 更新」六个页面**全部可用**，包括广告拦截与查询日志——这是装对构建之后白拿的，不需要另写应用。
-- 设备升级时注意：feed 里的 `mosdns-5.3.4-r15` 与旧镜像已装版本号**完全相同**，`apk` 会判定「已最新」而不替换。全新刷 ImageBuilder 镜像不受影响；单独升级需 `--force-reinstall` 或 bump `PKG_RELEASE`。
+- 设备升级不再卡在版本号上：feed 出的是 `mosdns-5.3.4-r1501`，大于 OpenWrt-Add 与旧镜像里的 `r15`，`apk upgrade` 会正常替换。全新刷 ImageBuilder 镜像本来就走 feed 的最新版。
 - 跨架构（`aarch64_generic`）的发布侧门禁只做静态断言，没有在真实设备上跑过实跑项。x86_64 会实跑，其结论代表同一份源码树。
 - `luci-i18n-mosdns-zh-cn`、`geo2txt`、`v2ray-geoip`、`v2ray-geosite` 仍由上游 feed 满足，不在自有 feed 内。
 

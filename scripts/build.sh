@@ -157,6 +157,19 @@ ${got}"
 		mv -f "${ib_dir}/repositories.new" "${ib_dir}/repositories"
 	fi
 	grep -qxF "${feed}" "${ib_dir}/repositories" || die "自有 feed 未写入 ImageBuilder repositories"
+
+	# 上游 build/scripts/build.sh 随后会用 `sed -i "1i"` 把 OpenWrt-Add 插到
+	# repositories 第一行，把自有 feed 挤到第二位。mosdns 与 luci-app-mosdns 在
+	# 两个源里是同一个版本号，源顺序就决定了装哪一份——而 OpenWrt-Add 的
+	# mosdns-5.3.4-r15 是无补丁构建，装上就是 953 端口那份故障。
+	# 上游那句插入被 `if ! grep -qxF` 包着，所以先把 OpenWrt-Add 追加到末尾，
+	# 幂等检查就会命中，它不会再插到第一位。
+	oa_feed="https://qiusimons.github.io/OpenWrt-Add/x86_64/packages.adb"
+	if ! grep -qxF "${oa_feed}" "${ib_dir}/repositories"; then
+		printf '%s\n' "${oa_feed}" >> "${ib_dir}/repositories"
+	fi
+	[ "$(head -n1 "${ib_dir}/repositories")" = "${feed}" ] ||
+		die "ImageBuilder repositories 首位不是自有 feed：$(head -n1 "${ib_dir}/repositories")"
 	echo "    version: ${VERSION_UP}"
 	echo "    feed: ${feed}"
 }
@@ -168,6 +181,18 @@ bash "${ROOT_DIR}/build/scripts/build.sh" x86 64 generic packages.x86_64 2>&1 | 
 rc=${PIPESTATUS[0]}
 set -e
 [ "${rc}" -eq 0 ] || die "上游 build.sh 退出码 ${rc}，日志：${IB_LOG}"
+
+# 兜底复核：prepare_imagebuilder 里是把 OpenWrt-Add 追加到末尾、借上游的
+# `grep -qxF` 幂等检查挡住它抢首位。上游若改了写法（无条件 sed 1i、或换成
+# 别的前置注入），这条就不再成立，自有 feed 会被挤到第二位，同版本号的
+# mosdns 就可能装成 OpenWrt-Add 的无补丁构建。这里按上游跑完后的实际文件复核。
+yun_feed_url="$(grep -v '^[[:space:]]*#' "${ROOT_DIR}/overlay/files/etc/apk/repositories.d/yun-feed.list" |
+	awk 'NF' | head -1)"
+ib_repos="$(find "${ROOT_DIR}/build" -maxdepth 5 -path '*openwrt-imagebuilder-*/repositories' -type f | head -1)"
+[ -n "${ib_repos}" ] || die "找不到 ImageBuilder repositories，无法复核 feed 顺序"
+[ "$(head -n1 "${ib_repos}")" = "${yun_feed_url}" ] ||
+	die "ImageBuilder repositories 首位被改成 $(head -n1 "${ib_repos}")，应为 ${yun_feed_url}"
+echo "    feed 顺序复核通过：自有 feed 仍在首位"
 
 echo "==> 6/7 缺包检查（上游默认 WARNING 跳过，这里升级为硬失败）"
 skipped="$(sed -n 's/.*skipping: //p' "${IB_LOG}" | tr '\n' ' ' | sed 's/  */ /g')"
