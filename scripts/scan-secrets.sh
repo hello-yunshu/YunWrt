@@ -46,9 +46,9 @@ PATTERNS=(
 
 hit() { printf '[%s] %s\n' "$1" "${2//$'\t'/: }" >>"${HITS}"; }
 
-# 批量判定：$1 = 待判定文件（每行 "file:line:content"）
+# 批量判定：$1 = 待判定文件（每行 "file:line:content"），$2 = "no-ip" 时跳过公网 IP 两条规则
 judge_file() {
-	local lines="$1" pat name re
+	local lines="$1" mode="${2:-}" pat name re
 	[ -s "${lines}" ] || return 0
 
 	for pat in "${PATTERNS[@]}"; do
@@ -57,6 +57,15 @@ judge_file() {
 		grep -iE -- "${re}" "${lines}" | grep -vE -- "${ALLOW_RE}" |
 			while IFS= read -r l; do hit "${name}" "${l}"; done
 	done
+
+	# 历史/对象扫描跳过公网 IP：这两条规则的前提是「行尾标记」和「当前工作树可改」，
+	# 对已经提交过的内容两者都不成立——历史里的裸 IP 既没法回填标记（要改写历史），
+	# 也不能说明现在的工作树有问题；而这个仓库的文档本来就大量引用实测 IP
+	# （递归地址、traceroute、DoT 端点）。凭据类规则在历史里照旧生效，
+	# 现行状态由工作树扫描（带逐行标记）负责。
+	if [ "${mode}" = "no-ip" ]; then
+		return 0
+	fi
 
 	# 公网 IPv4：八位组必须 ≤255（排除 6.12.94.2023 这类版本号），且非私有/保留/文档段
 	awk '
@@ -187,6 +196,24 @@ self_test() {
 		return 1
 	fi
 	echo "ok  self-test: allow-public-ip 只解公网 IP，同行的 token 仍然命中"
+
+	# 5) 历史/对象模式：公网 IP 不判，凭据照判——否则历史扫描会被文档里的实测 IP 淹没
+	printf 'a:1\tns %s\nb:1\ttoken = "%s"\n' "${ip4}" "${gh_sample}" >"${tmp}/lines"
+	: >"${HITS}"
+	judge_file "${tmp}/lines" no-ip
+	if grep -qF '[公网 IPv4]' "${HITS}"; then
+		echo "FAIL self-test: no-ip 模式仍在判公网 IP" >&2
+		cat "${HITS}" >&2
+		rm -rf "${tmp}"
+		return 1
+	fi
+	if ! grep -qF "${gh_sample}" "${HITS}"; then
+		echo "FAIL self-test: no-ip 模式把凭据一起放过了" >&2
+		cat "${HITS}" >&2
+		rm -rf "${tmp}"
+		return 1
+	fi
+	echo "ok  self-test: no-ip 模式跳过公网 IP，凭据仍然命中"
 	rm -rf "${tmp}"
 }
 
@@ -206,7 +233,8 @@ objects)
 	done < <(git -C "${ROOT_DIR}" cat-file --batch-all-objects --batch-check='%(objecttype) %(objectname)' |
 		awk '$1 == "blob" { print $2 }') >"${LINES}"
 	echo "    待扫行数：$(wc -l <"${LINES}" | tr -d ' ')"
-	judge_file "${LINES}"
+	echo "    规则：凭据/私钥/订阅/UUID/MAC/口令；公网 IP 不参与（历史里已公开且无法回填标记）"
+	judge_file "${LINES}" no-ip
 	;;
 tree)
 	echo "==> 工作树扫描（tracked 文件）"
@@ -220,7 +248,8 @@ history)
 	echo "==> 全历史扫描"
 	scan_history >"${LINES}"
 	echo "    待扫行数：$(wc -l <"${LINES}" | tr -d ' ')"
-	judge_file "${LINES}"
+	echo "    规则：凭据/私钥/订阅/UUID/MAC/口令；公网 IP 不参与（历史里已公开且无法回填标记）"
+	judge_file "${LINES}" no-ip
 	;;
 esac
 
