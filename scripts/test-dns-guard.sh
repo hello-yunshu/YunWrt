@@ -217,4 +217,45 @@ assert_eq "$ROLE" fallback "fallback DNS without a snapshot must not look health
 assert_eq "$ORIG_RECORDED" 0 "missing snapshot must not invent an original upstream"
 ok "legacy fallback without snapshot fails closed"
 
+# ---- 2026-11-23 现网回归：快照污染导致静默永久降级 / wan 兜底用了死 DNS ----
+
+# wan 模式不能依赖运营商下发的 DNS（实测 218.4.4.4 / 218.2.2.2 全无响应）
+UCI_CALLS=""
+RELOADS=0
+UCI_SERVERS=''
+apply_wan || fail "wan apply should succeed"
+case "$UCI_CALLS" in *' add_list dhcp.@dnsmasq[0].server=223.5.5.5'*) ;; *) fail "wan apply missed built-in resolver" ;; esac
+case "$UCI_CALLS" in *' add_list dhcp.@dnsmasq[0].server=114.114.114.114'*) ;; *) fail "wan apply missed third built-in resolver" ;; esac
+case "$UCI_CALLS" in *' set dhcp.@dnsmasq[0].noresolv=1'*) ;; *) fail "wan apply missed noresolv" ;; esac
+case "$UCI_CALLS" in *' set dhcp.@dnsmasq[0].resolvfile='*) fail "wan apply must not depend on resolv.conf.auto" ;; esac
+assert_eq "$RELOADS" 1 "wan apply triggers dnsmasq reload"
+ok "wan apply uses built-in CN resolvers"
+
+UCI_SERVERS='223.5.5.5 223.6.6.6 114.114.114.114'
+wan_servers_ok || fail "intact wan upstream list must be accepted"
+UCI_SERVERS='223.5.5.5 223.6.6.6'
+wan_servers_ok && fail "wan upstream drift must be detected"
+ok "wan mode detects upstream drift"
+
+# clear_orig_snapshot 必须连内存快照一起复位：否则 save_state 把 ORIG_RECORDED=1
+# 固化下去，record_orig 的短路会让"原值"永远不再刷新（现网 ORIG_SERVER 曾被固化成
+# 127.0.0.1#953）。
+ORIG_RECORDED=1
+ORIG_SERVER='127.0.0.1#953'
+ORIG_NORESOLV=1; ORIG_NORESOLV_SET=1
+ORIG_RESOLVFILE=''; ORIG_RESOLVFILE_SET=0
+clear_orig_snapshot >/dev/null 2>&1
+assert_eq "$ORIG_RECORDED" 0 "clearing snapshot must reset ORIG_RECORDED"
+assert_eq "$ORIG_SERVER" "" "clearing snapshot must drop the stale original server"
+assert_eq "$ORIG_NORESOLV_SET" 0 "clearing snapshot must reset presence flags"
+ok "clearing snapshot resets the in-memory original"
+
+# 原值本身等于兜底端口时必须拒绝恢复，而不是把 dnsmasq 永久钉在 953 上并判"已恢复"
+ORIG_RECORDED=1
+ORIG_SERVER='127.0.0.1#953'
+ORIG_NORESOLV=1; ORIG_NORESOLV_SET=1
+FALLBACK_PORT=953
+apply_primary && fail "snapshot pointing at the fallback port must be refused"
+ok "fallback-port snapshot is refused instead of pinning dnsmasq"
+
 printf 'PASS: dns-guard unit checks\n'

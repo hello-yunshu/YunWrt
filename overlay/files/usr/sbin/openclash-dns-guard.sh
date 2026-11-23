@@ -19,6 +19,8 @@ BOOT_GRACE=90
 # 恢复失败告警的最小间隔，避免每轮都推送。
 RESTORE_ALERT_GAP=300
 DEGRADE_HARD_MAX=140
+# wan 模式（653 与 953 同时不可用）使用的硬编码国内递归。见 apply_wan 的注释。
+WAN_FALLBACK_SERVERS="223.5.5.5 223.6.6.6 114.114.114.114"
 
 LOG_FILE="/var/log/openclash-dns-guard.log"
 LOG_FALLBACK=""
@@ -364,6 +366,16 @@ drain_queue() {
 dnsmasq_servers() { uci -q get dhcp.@dnsmasq[0].server 2>/dev/null; }
 has_srv() { dnsmasq_servers | grep -q "$1"; }
 
+# wan 模式是否仍然是我们要的那组上游。只比对 uci，不去读 dnsmasq 的生成配置：
+# reload 有延迟，读生成配置会在每轮巡检里误判成"被外部改回"从而反复重写。
+wan_servers_ok() {
+	_wv=$(dnsmasq_servers)
+	for _ws in $WAN_FALLBACK_SERVERS; do
+		case " ${_wv} " in *" ${_ws} "*) ;; *) return 1 ;; esac
+	done
+	return 0
+}
+
 # dnsmasq 实际加载的生成配置（reload 会重建它），用于回读校验
 dnsmasq_effective_servers() {
 	for _ef in /var/etc/dnsmasq.conf.cfg*; do
@@ -449,6 +461,21 @@ clear_orig_snapshot() {
 	uci -q delete "$CFG.recovery_resolvfile"
 	uci -q delete "$CFG.recovery_role"
 	uci -q commit openclash-dns-guard
+	# 必须同时把内存快照一起复位，否则 save_state 会把 ORIG_RECORDED=1 连同
+	# ORIG_SERVER 持久化下去；而 record_orig 的第一行是「已记录就直接返回」，
+	# 下次降级就再也不刷新原值了。现网出现过这个后果：ORIG_SERVER 被固化成
+	# 127.0.0.1#953，恢复时把 dnsmasq 指向兜底端口，verify_restore 还判成功，
+	# 于是永久停在 fallback 上游而 ROLE 显示 primary。
+	reset_orig_snapshot
+}
+
+reset_orig_snapshot() {
+	ORIG_RECORDED=0
+	ORIG_SERVER=""
+	ORIG_NORESOLV=""
+	ORIG_RESOLVFILE=""
+	ORIG_NORESOLV_SET=0
+	ORIG_RESOLVFILE_SET=0
 }
 
 persist_recovery_role() {
@@ -462,6 +489,15 @@ apply_primary() {
 		log "restore FAILED: original dnsmasq settings were never recorded, refusing to guess"
 		return 1
 	fi
+	# 原值等于我们自己的兜底上游，说明这份快照是在降级状态下拍的（历史 bug：
+	# ORIG_RECORDED 未复位，沿用旧值）。照它"恢复"等于把 dnsmasq 永久钉在
+	# fallback 上，而且 verify_restore 会因为期望值本身就是兜底值而判成功。
+	for _ps in $ORIG_SERVER; do
+		if [ "$_ps" = "127.0.0.1#${FALLBACK_PORT}" ]; then
+			log "restore FAILED: recorded original upstream [$ORIG_SERVER] equals the fallback port, refusing to pin dnsmasq to ${FALLBACK_PORT}"
+			return 1
+		fi
+	done
 	case "$ORIG_NORESOLV" in
 	''|0|1) ;;
 	*)
@@ -501,9 +537,17 @@ apply_fallback() {
 }
 
 apply_wan() {
+	# 不用 /tmp/resolv.conf.d/resolv.conf.auto：那里面是 PPPoE 下发的运营商 DNS，
+	# 实测这台线路上 218.4.4.4 / 218.2.2.2 连续 6 次全部无响应。切过去等于把全网
+	# DNS 从"还能解析"变成"彻底解析不了"，而 wan 是最后一级兜底，没有下一级了。
+	# 因此硬编码一组实测可用的国内递归（223.5.5.5 27-31ms / 223.6.6.6 28ms /
+	# 114.114.114.114 14ms）。
 	uci -q del dhcp.@dnsmasq[0].server
-	uci -q set dhcp.@dnsmasq[0].noresolv='0'
-	uci -q set dhcp.@dnsmasq[0].resolvfile='/tmp/resolv.conf.d/resolv.conf.auto'
+	for _ws in $WAN_FALLBACK_SERVERS; do
+		uci -q add_list dhcp.@dnsmasq[0].server="$_ws"
+	done
+	uci -q set dhcp.@dnsmasq[0].noresolv='1'
+	uci -q delete dhcp.@dnsmasq[0].resolvfile
 	uci -q commit dhcp || return 1
 	dnsmasq_reload
 }
@@ -674,14 +718,14 @@ switch_to() {
 		persist_recovery_role wan || { log "cannot persist WAN recovery role"; return 1; }
 		suspend_watchdog
 		if ! apply_wan; then
-			log "WAN DNS apply failed; retaining current role and retrying"
+			log "WAN-DNS apply failed; retaining current role and retrying"
 			resume_watchdog
 			return 1
 		fi
 		rule_del
-		log "SWITCH ->wan-dns: 653 and 953 both unreachable, dnsmasq reset to WAN resolv.conf.auto"
-		[ "$NOTIFY_SV" = "1" ] && notify_event degraded "DNS 上游不可用：已回落 WAN DNS" \
-			"653 与 953 连续探测失败，已切换到 WAN resolv.conf.auto。" timeSensitive
+		log "SWITCH ->wan-dns: 653 and 953 both unreachable, dnsmasq reset to built-in CN resolvers [${WAN_FALLBACK_SERVERS}]"
+		[ "$NOTIFY_SV" = "1" ] && notify_event degraded "DNS 上游不可用：已回落内置国内 DNS" \
+			"653 与 953 连续探测失败，已切换到内置国内 DNS（${WAN_FALLBACK_SERVERS}）。" timeSensitive
 		;;
 	esac
 	ROLE="$NEW"; LAST_SWITCH="$NOW"; OK_CNT=0; FAIL_CNT=0; P953_FAIL_CNT=0
@@ -701,8 +745,8 @@ repair_if_reverted() {
 		suspend_watchdog
 		;;
 	wan)
-		if [ "$(uci -q get dhcp.@dnsmasq[0].noresolv)" != "0" ]; then
-			log "dnsmasq upstream reverted externally (now=[$(dnsmasq_servers)]), re-applying WAN DNS"
+		if ! wan_servers_ok || [ "$(uci -q get dhcp.@dnsmasq[0].noresolv)" != "1" ]; then
+			log "dnsmasq upstream reverted externally (now=[$(dnsmasq_servers)]), re-applying built-in CN resolvers"
 			apply_wan
 		fi
 		rule_present && rule_del
