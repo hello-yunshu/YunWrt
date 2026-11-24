@@ -11,20 +11,6 @@ LOG_JSON="${ROOT_DIR}/build-log/${TS}-${SHA:0:7}.json"
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 
-echo "==> 1/7 接口检查"
-bash "${ROOT_DIR}/scripts/check-upstream.sh"
-
-echo "==> 2/7 base 校验"
-bash "${ROOT_DIR}/scripts/verify-bases.sh"
-
-echo "==> 3/7 包检查"
-bash "${ROOT_DIR}/scripts/check-packages.sh"
-
-echo "==> 4/7 组装"
-bash "${ROOT_DIR}/scripts/assemble.sh"
-
-echo "==> 5/7 feed 就绪检查 + 预置 ImageBuilder（注入自有 feed）"
-
 # 自有 feed 的 mosdns/luci-app-mosdns 是后加的，而 feed 走 Pages 部署，跟本仓库的
 # 提交不是同一个节奏：本仓库先跑、feed 流水线后部署完，这段空窗期里 apk 只能看到
 # OpenWrt-Add 的同名 r15 无补丁构建，一路静默装进去，直到 8 分钟后的 mosdns 门禁
@@ -49,6 +35,27 @@ check_feed_ready() {
       等 yun-openwrt-packages 的 feed 流水线部署完成（Pages 部署成功）再重跑，别在这里绕。"
 	echo "    feed 已带 mosdns / luci-app-mosdns（${url}）"
 }
+
+# 供 CI 在 repository_dispatch 触发时先探测：只读线上 feed，不做任何本地准备。
+if [ "${1:-}" = "--check-feed" ]; then
+	check_feed_ready
+	exit 0
+fi
+
+echo "==> 1/7 接口检查"
+bash "${ROOT_DIR}/scripts/check-upstream.sh"
+
+echo "==> 2/7 base 校验"
+bash "${ROOT_DIR}/scripts/verify-bases.sh"
+
+echo "==> 3/7 包检查"
+bash "${ROOT_DIR}/scripts/check-packages.sh"
+
+echo "==> 4/7 组装"
+bash "${ROOT_DIR}/scripts/assemble.sh"
+
+echo "==> 5/7 feed 就绪检查 + 预置 ImageBuilder（注入自有 feed）"
+
 check_feed_ready
 
 

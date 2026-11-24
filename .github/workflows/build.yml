@@ -2,6 +2,8 @@ name: build
 
 on:
   workflow_dispatch:
+  repository_dispatch:
+    types: [feed-updated]
   schedule:
     - cron: "0 18 * * *" # UTC 18:00 = 北京 02:00
   push:
@@ -30,7 +32,25 @@ jobs:
 
       - uses: actions/checkout@v7
 
+      # feed 流水线部署完 Pages 后会 repository_dispatch 过来。Pages 生效与部署
+      # 成功之间可能还有几秒空窗，此时线上还是上一批索引；这种触发直接跳过，
+      # 不把空窗期变成一次误红，等下一次 feed 发布再构建。
+      # 手动/定时/push 触发不走跳过逻辑，仍由 build.sh 的硬检查报错。
+      - name: 检查 feed 是否就绪（dispatch 触发）
+        id: feed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = repository_dispatch ] && ! bash scripts/build.sh --check-feed; then
+            echo "FEED_READY=false" >> "$GITHUB_ENV"
+            echo "::notice::线上 feed 尚未带上配套包，跳过本次构建，等待下一次 feed 发布"
+          else
+            echo "FEED_READY=true" >> "$GITHUB_ENV"
+          fi
+
       - name: 依赖
+        if: env.FEED_READY != 'false'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
@@ -38,12 +58,15 @@ jobs:
             rsync zstd file wget curl ca-certificates jq python3 swig cpio qemu-utils
 
       - name: 同步上游 YAOF
+        if: env.FEED_READY != 'false'
         run: bash scripts/sync-upstream.sh
 
       - name: 构建
+        if: env.FEED_READY != 'false'
         run: bash scripts/build.sh
 
       - name: 产物
+        if: env.FEED_READY != 'false'
         uses: actions/upload-artifact@v7
         with:
           name: yunwrt-image
@@ -53,6 +76,7 @@ jobs:
           if-no-files-found: error
 
       - name: 生成校验和
+        if: env.FEED_READY != 'false'
         run: |
           set -euo pipefail
           ver="$(jq -r '.openwrt_version' "$(ls -1 build-log/*.json | tail -1)")"
@@ -65,6 +89,7 @@ jobs:
       # 规则对齐 SWrt：tag 为 <平台>-<上游版本>，Release 名带产品名，不是 prerelease。
       # 每次构建都发布，同一上游版本直接覆盖资产（先删旧资产再传，避免按日期累积）。
       - name: 创建或更新 Release
+        if: env.FEED_READY != 'false'
         uses: ncipollo/release-action@v1.21.0
         with:
           name: YunWrt-${{ env.OPENWRT_VERSION }}
