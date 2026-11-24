@@ -1,8 +1,8 @@
 # YunWrt 迁移分期方案
 
 - 日期：2026-11-11（v6，FlowCone 定案 + 工期压缩）
-- 状态：待评审（未执行）
-- 目标仓库：`hello-yunshu/YunWrt`（尚未创建）
+- 状态：已执行，归档（2026-11-24）；仓库已创建并持续构建
+- 目标仓库：`hello-yunshu/YunWrt`（已创建）
 - 上游：`QiuSimons/YAOF` 分支 `25.12` + `QiuSimons/OpenWrt-Add` 的二进制 feed
 - 范围：仅 x86_64；不 fork 上游、不给上游开 PR
 - 功能保全：逐项审计见 [2026-11-11-yunwrt-capability-preservation.md](./2026-11-11-yunwrt-capability-preservation.md)（含 FlowCone 定案 §4.3、功能验收 §4.4、范围冻结 §10.4）
