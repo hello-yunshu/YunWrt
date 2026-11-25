@@ -20,12 +20,18 @@ sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else sh
 # 依据是同上一次 Pages 部署一起发布的 source-lock.json（明文 JSON），它在就说明
 # 索引也是同一批——比解 apk 的 .adb 索引稳。
 check_feed_ready() {
-	local feed url lock pkg missing attempt attempts interval
+	local feed url candidate_url lock candidate pkg missing attempt attempts interval expected actual
 	feed="$(grep -v '^[[:space:]]*#' "${ROOT_DIR}/overlay/files/etc/apk/repositories.d/yun-feed.list" |
 		awk 'NF' | head -1)"
-	[ -n "${feed}" ] || die "yun-feed.list 里没有 feed 地址"
+	expected="${FEED_EXPECTED_BUILD_ID:-}"
 	# .../<版本>/<arch>/packages.adb -> .../source-lock.json
-	url="$(printf '%s' "${feed}" | sed -E 's#/[^/]+/[^/]+/packages\.adb$##')/source-lock.json"
+	if [ -n "${FEED_READY_LOCK_URL:-}" ]; then
+		url="${FEED_READY_LOCK_URL}"
+	else
+		[ -n "${feed}" ] || die "yun-feed.list 里没有 feed 地址"
+		url="$(printf '%s' "${feed}" | sed -E 's#/[^/]+/[^/]+/packages\.adb$##')/source-lock.json"
+	fi
+	candidate_url="${FEED_READY_CANDIDATE_URL:-${url%/source-lock.json}/candidate.json}"
 	attempts="${FEED_READY_ATTEMPTS:-15}"
 	interval="${FEED_READY_INTERVAL:-2}"
 	attempt=1
@@ -36,6 +42,18 @@ check_feed_ready() {
 			for pkg in mosdns luci-app-mosdns; do
 				printf '%s' "${lock}" | grep -q "\"${pkg}\"" || missing="${missing} ${pkg}"
 			done
+			# source-lock.json 自引入 mosdns 起就固定带这两个键，CDN 还在返回旧
+			# 副本时键检查也会通过。dispatch 触发时用它 payload 里的
+			# feed_run_id 对齐线上 candidate.json 的 buildId，才能证明这次部署
+			# 真的已经生效；没有期望值时保持旧行为（手动/定时触发）。
+			if [ -z "${missing}" ] && [ -n "${expected}" ]; then
+				candidate="$(curl -fsSL --connect-timeout 5 --max-time 10 --retry 1 --retry-delay 1 "${candidate_url}" || true)"
+				actual=""
+				if [ -n "${candidate}" ]; then
+					actual="$(printf '%s' "${candidate}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("buildId", ""))' 2>/dev/null || true)"
+				fi
+				[ "${actual}" = "${expected}" ] || missing="${missing} buildId(期望 ${expected}，实际 ${actual:-未取到})"
+			fi
 			[ -z "${missing}" ] && break
 		fi
 		if [ "${attempt}" -ge "${attempts}" ]; then
@@ -48,7 +66,7 @@ check_feed_ready() {
 		attempt=$((attempt + 1))
 		sleep "${interval}"
 	done
-	echo "    feed 已带 mosdns / luci-app-mosdns（${url}）"
+	echo "    feed 已带 mosdns / luci-app-mosdns（${url}${expected:+，buildId=${expected}}）"
 }
 
 # 供 CI 在 repository_dispatch 触发时先探测：只读线上 feed，不做任何本地准备。
