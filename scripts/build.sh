@@ -15,24 +15,39 @@ sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else sh
 # 提交不是同一个节奏：本仓库先跑、feed 流水线后部署完，这段空窗期里 apk 只能看到
 # OpenWrt-Add 的同名 r15 无补丁构建，一路静默装进去，直到 8 分钟后的 mosdns 门禁
 # 才报「不带 stats_api」——看起来像代码坏了，实际是 feed 还没发布。
-# 这里先花两秒确认线上 feed 已带上配套版，把空窗期变成一句能看懂的话。
+# 这里对线上 source-lock.json 做短轮询（默认 15 次 × 2 秒），等 Pages 把新索引铺开；
+# 超过窗口才报错，避免把「部署完成但 CDN 还没生效」当成代码问题。
 # 依据是同上一次 Pages 部署一起发布的 source-lock.json（明文 JSON），它在就说明
 # 索引也是同一批——比解 apk 的 .adb 索引稳。
 check_feed_ready() {
-	local feed url lock pkg missing=""
+	local feed url lock pkg missing attempt attempts interval
 	feed="$(grep -v '^[[:space:]]*#' "${ROOT_DIR}/overlay/files/etc/apk/repositories.d/yun-feed.list" |
 		awk 'NF' | head -1)"
 	[ -n "${feed}" ] || die "yun-feed.list 里没有 feed 地址"
 	# .../<版本>/<arch>/packages.adb -> .../source-lock.json
 	url="$(printf '%s' "${feed}" | sed -E 's#/[^/]+/[^/]+/packages\.adb$##')/source-lock.json"
-	lock="$(curl -fsSL --retry 3 --retry-delay 2 "${url}" || true)"
-	[ -n "${lock}" ] || die "取不到 feed 的 source-lock.json：${url}"
-	for pkg in mosdns luci-app-mosdns; do
-		printf '%s' "${lock}" | grep -q "\"${pkg}\"" || missing="${missing} ${pkg}"
-	done
-	[ -z "${missing}" ] ||
-		die "线上 feed 还没发布配套版（缺${missing}）：继续构建只会装到 OpenWrt-Add 的无补丁 mosdns。
+	attempts="${FEED_READY_ATTEMPTS:-15}"
+	interval="${FEED_READY_INTERVAL:-2}"
+	attempt=1
+	while :; do
+		missing=""
+		lock="$(curl -fsSL --connect-timeout 5 --max-time 10 --retry 1 --retry-delay 1 "${url}" || true)"
+		if [ -n "${lock}" ]; then
+			for pkg in mosdns luci-app-mosdns; do
+				printf '%s' "${lock}" | grep -q "\"${pkg}\"" || missing="${missing} ${pkg}"
+			done
+			[ -z "${missing}" ] && break
+		fi
+		if [ "${attempt}" -ge "${attempts}" ]; then
+			if [ -z "${lock}" ]; then
+				die "取不到 feed 的 source-lock.json：${url}（已重试 ${attempts} 次）"
+			fi
+			die "线上 feed 还没发布配套版（缺${missing}，已重试 ${attempts} 次）：继续构建只会装到 OpenWrt-Add 的无补丁 mosdns。
       等 yun-openwrt-packages 的 feed 流水线部署完成（Pages 部署成功）再重跑，别在这里绕。"
+		fi
+		attempt=$((attempt + 1))
+		sleep "${interval}"
+	done
 	echo "    feed 已带 mosdns / luci-app-mosdns（${url}）"
 }
 

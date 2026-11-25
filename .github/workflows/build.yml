@@ -32,9 +32,9 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      # feed 流水线部署完 Pages 后会 repository_dispatch 过来。Pages 生效与部署
-      # 成功之间可能还有几秒空窗，此时线上还是上一批索引；这种触发直接跳过，
-      # 不把空窗期变成一次误红，等下一次 feed 发布再构建。
+      # feed 流水线部署完 Pages 后会 repository_dispatch 过来。build.sh 的
+      # --check-feed 会短轮询线上 source-lock.json（默认 15 次 × 2 秒）等 CDN 铺开；
+      # 超过窗口仍拿不到才跳过，不把空窗期变成一次误红。
       # 手动/定时/push 触发不走跳过逻辑，仍由 build.sh 的硬检查报错。
       - name: 检查 feed 是否就绪（dispatch 触发）
         id: feed
