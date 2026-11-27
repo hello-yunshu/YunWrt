@@ -145,6 +145,9 @@ openssh-sftp-server
 -luci-i18n-ap-modem-zh-cn
 -luci-app-dae
 -luci-i18n-dae-zh-cn
+# YAOF 将 dae 重命名为 daeuniverse，继续显式排除，避免随上游默认包名变化进入镜像。
+-luci-app-daeuniverse
+-luci-i18n-daeuniverse-zh-cn
 -luci-app-filemanager
 -luci-i18n-filemanager-zh-cn
 -luci-app-homeproxy
