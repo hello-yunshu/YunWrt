@@ -1,0 +1,15 @@
+{
+  "kind": "override",
+  "upstream_path": "etc/init.d/mosdns",
+  "base_sha256": "666ddbb1fbc269d7d45f891bc58876c2b14ac3c3bdd9e218080788c48a859cdd",
+  "base_source": "luci-app-mosdns@dbdd91ab8ac8b079b6a3ca1a48d99e970d17111b (1.7.15 / mosdns 5.3.4)",
+  "source_repo": "https://github.com/sbwml/luci-app-mosdns",
+  "source_ref": "dbdd91ab8ac8b079b6a3ca1a48d99e970d17111b",
+  "source_path": "luci-app-mosdns/root/etc/init.d/mosdns",
+  "asserts": [
+    "DUMP_FILE=/tmp/mosdns/cache.dump",
+    "mkdir -p \"${DUMP_FILE%/*}\""
+  ],
+  "reason": "缓存 dump 默认落在 /etc/mosdns（overlay 闪存），按 dump_interval 周期性写入，属于无谓的闪存磨损；改到 tmpfs 运行目录 /tmp/mosdns（与 geo 数据同目录，重启即清空）后在启动时 mkdir 兜底。OpenWrt 上 /var 本身软链到 /tmp，故 /var/mosdns 与 /tmp/mosdns 等价。",
+  "owner": "yunwrt"
+}

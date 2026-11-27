@@ -26,21 +26,34 @@ for d in "${ROOT_DIR}"/patches/*/; do
 	spath="$(jq -r '.source_path // empty' "${d}meta.json")"
 	mpath="$(jq -r '.makefile_path // empty' "${d}meta.json")"
 	expect="$(jq -r '.base_sha256 // empty' "${d}meta.json")"
+	sref="$(jq -r '.source_ref // empty' "${d}meta.json")"
 
-	[ -n "${repo}" ] && [ -n "${spath}" ] && [ -n "${mpath}" ] && [ -n "${expect}" ] || {
-		bad "${name}: meta.json 缺 source_repo/source_path/makefile_path/base_sha256"
+	[ -n "${repo}" ] && [ -n "${spath}" ] && [ -n "${expect}" ] || {
+		bad "${name}: meta.json 缺 source_repo/source_path/base_sha256"
 		continue
 	}
 
-	mk="$(curl -fsSL --retry 3 "https://raw.githubusercontent.com/openwrt/openwrt/v${VERSION}/${mpath}" 2>/dev/null)" || {
-		bad "${name}: 取不到 v${VERSION} 的 ${mpath}"
-		continue
-	}
-	srcver="$(printf '%s\n' "${mk}" | sed -n 's/^PKG_SOURCE_VERSION:=//p' | head -1)"
-	[ -n "${srcver}" ] || {
-		bad "${name}: ${mpath} 里没有 PKG_SOURCE_VERSION"
-		continue
-	}
+	if [ -n "${sref}" ]; then
+		# 非 openwrt 核心包（自有 feed）：源码版本由 meta.json 里的 source_ref 钉住，
+		# 没有对应的 openwrt Makefile 可解析。
+		srcver="${sref}"
+		desc="ref ${srcver}"
+	else
+		[ -n "${mpath}" ] || {
+			bad "${name}: meta.json 缺 makefile_path（未提供 source_ref）"
+			continue
+		}
+		mk="$(curl -fsSL --retry 3 "https://raw.githubusercontent.com/openwrt/openwrt/v${VERSION}/${mpath}" 2>/dev/null)" || {
+			bad "${name}: 取不到 v${VERSION} 的 ${mpath}"
+			continue
+		}
+		srcver="$(printf '%s\n' "${mk}" | sed -n 's/^PKG_SOURCE_VERSION:=//p' | head -1)"
+		[ -n "${srcver}" ] || {
+			bad "${name}: ${mpath} 里没有 PKG_SOURCE_VERSION"
+			continue
+		}
+		desc="v${VERSION} / ${srcver}"
+	fi
 
 	actual="$(curl -fsSL --retry 3 "${repo}/raw/${srcver}/${spath}" 2>/dev/null | sha256 | awk '{print $1}')" || {
 		bad "${name}: 取不到源码文件 ${spath}@${srcver}"
@@ -48,9 +61,9 @@ for d in "${ROOT_DIR}"/patches/*/; do
 	}
 
 	if [ "${actual}" = "${expect}" ]; then
-		ok "${name}: 基线匹配 v${VERSION} / ${srcver}"
+		ok "${name}: 基线匹配 ${desc}"
 	else
-		bad "${name}: 基线漂移（openwrt v${VERSION} 的 ${srcver}）期望=${expect} 实际=${actual}"
+		bad "${name}: 基线漂移（${desc}）期望=${expect} 实际=${actual}"
 	fi
 done
 

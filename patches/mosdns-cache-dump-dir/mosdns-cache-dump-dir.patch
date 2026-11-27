@@ -1,0 +1,28 @@
+--- a/etc/init.d/mosdns
++++ b/etc/init.d/mosdns
+@@ -8,7 +8,7 @@
+ PROG=/usr/bin/mosdns
+ CONF=$(uci -q get mosdns.config.configfile)
+ CRON_FILE=/etc/crontabs/root
+-DUMP_FILE=/etc/mosdns/cache.dump
++DUMP_FILE=/tmp/mosdns/cache.dump
+ DUMP_FILE_DEFAULT=/usr/share/mosdns/cache.dump
+ STATS_DUMP_FILE=/etc/mosdns/stats.dump
+ MOSDNS_SCRIPT=/usr/share/mosdns/mosdns.uc
+@@ -254,7 +254,7 @@
+ 		json_add_int "size" "$cache_size"
+ 		json_add_int "lazy_cache_ttl" "$lazy_cache_ttl"
+ 		[ "$dump_file" -eq 1 ] && {
+-			json_add_string "dump_file" "/etc/mosdns/cache.dump"
++			json_add_string "dump_file" "/tmp/mosdns/cache.dump"
+ 			json_add_int "dump_interval" "$dump_interval"
+ 		}
+ 		[ "$prefetch" -eq 1 ] && {
+@@ -742,6 +742,7 @@
+ 	# print json
+ 	json_dump > /var/etc/mosdns.json
+ 
++	mkdir -p "${DUMP_FILE%/*}"
+ 	# init dump_file
+ 	[ "$dump_file" -eq 1 ] && [ ! -f $DUMP_FILE ] && cp -a $DUMP_FILE_DEFAULT $DUMP_FILE
+ 	[ "$dump_file" -eq 0 ] && \cp -a $DUMP_FILE_DEFAULT $DUMP_FILE
